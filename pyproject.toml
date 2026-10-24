@@ -11,11 +11,13 @@ requires-python = ">=3.10"
 dependencies = [
     "PySide6",
     "platformdirs",
+    "piexif",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "Pillow",
 ]
 
 [project.scripts]
