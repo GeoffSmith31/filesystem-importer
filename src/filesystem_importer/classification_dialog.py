@@ -1,3 +1,4 @@
+
 # =============================================================================
 #
 # Filesystem Importer
@@ -88,13 +89,22 @@ class ClassificationDialog(QDialog):
             MAX_CLASSIFICATION_LEVELS,
         )
 
-        return {
+        level_names = {
             level: sorted(
                 names_by_level.get(level, set()),
                 key=str.casefold,
             )
             for level in range(1, displayed_depth + 1)
         }
+
+        logger.debug(
+            "Directory levels built: deepest level %d, "
+            "%d levels displayed.",
+            self.deepest_level,
+            len(level_names),
+        )
+
+        return level_names
 
     def _build_ui(self):
         """Create the classification table and dialog controls."""
@@ -119,6 +129,13 @@ class ClassificationDialog(QDialog):
         layout.addWidget(summary)
 
         if deepest_level > MAX_CLASSIFICATION_LEVELS:
+            logger.warning(
+                "Source hierarchy reaches level %d, exceeding the "
+                "classification limit of %d.",
+                deepest_level,
+                MAX_CLASSIFICATION_LEVELS,
+            )
+
             warning = QLabel(
                 f"Warning: the directory hierarchy extends beyond "
                 f"Level {MAX_CLASSIFICATION_LEVELS}. Only the first "
@@ -234,6 +251,11 @@ class ClassificationDialog(QDialog):
         }
 
         if len(classifications) != len(self.category_combos):
+            logger.warning(
+                "Classification submission rejected: not all displayed "
+                "levels have a category."
+            )
+
             QMessageBox.warning(
                 self,
                 "Incomplete Classification",
@@ -249,3 +271,4 @@ class ClassificationDialog(QDialog):
         )
 
         self.accept()
+

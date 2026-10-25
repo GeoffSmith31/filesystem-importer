@@ -43,7 +43,13 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
     """
     image_path = Path(image_path)
 
+    logger.info("Starting EXIF UserComment capability test: %s", image_path)
+
     if image_path.suffix.lower() not in {".jpg", ".jpeg"}:
+        logger.info(
+            "EXIF capability test skipped: unsupported file extension %s",
+            image_path.suffix,
+        )
         return ExifCapabilityResult(
             supported=False,
             reason="EXIF capability testing is currently limited to JPEG.",
@@ -53,6 +59,11 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
         original_exif = piexif.load(str(image_path))
         original_comment = original_exif["Exif"].get(
             piexif.ExifIFD.UserComment
+        )
+
+        logger.debug(
+            "Original UserComment present: %s",
+            original_comment is not None,
         )
 
         test_value = f"FilesystemImporterTest-{uuid4().hex}"
@@ -65,6 +76,7 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
         }
         test_exif["Exif"][piexif.ExifIFD.UserComment] = test_comment
 
+        logger.debug("Writing temporary UserComment test value.")
         piexif.insert(piexif.dump(test_exif), str(image_path))
 
         written_exif = piexif.load(str(image_path))
@@ -73,6 +85,8 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
         )
         if written_comment != test_comment:
             raise ValueError("Temporary UserComment could not be verified.")
+
+        logger.debug("Temporary UserComment verified; restoring original value.")
 
         if original_comment is None:
             written_exif["Exif"].pop(piexif.ExifIFD.UserComment, None)
@@ -88,7 +102,14 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
         if restored_comment != original_comment:
             raise ValueError("Original UserComment could not be verified.")
 
-        logger.info("EXIF UserComment capability test succeeded: %s", image_path)
+        logger.info(
+            "Original UserComment restored and verified: %s",
+            image_path,
+        )
+        logger.info(
+            "EXIF UserComment capability test succeeded: %s",
+            image_path,
+        )
         return ExifCapabilityResult(supported=True)
 
     except Exception as exc:

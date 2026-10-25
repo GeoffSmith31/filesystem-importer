@@ -34,6 +34,11 @@ class EventNameDialog(QDialog):
     def __init__(self, suggested_name="", parent=None):
         super().__init__(parent)
 
+        logger.debug(
+            "Initialising Event Name dialog; suggested name length: %d.",
+            len(suggested_name),
+        )
+
         self.setWindowTitle("Confirm Event Name")
         self.resize(500, 170)
         self.setMinimumWidth(460)
@@ -69,6 +74,10 @@ class EventNameDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        self.rejected.connect(
+            lambda: logger.info("Event Name dialog cancelled.")
+        )
+
         logger.info(
             "Event Name dialog prepared; suggestion provided: %s",
             bool(suggested_name),
@@ -97,3 +106,4 @@ class EventNameDialog(QDialog):
 
         logger.info("Event Name confirmed: %s", event_name)
         self.accept()
+

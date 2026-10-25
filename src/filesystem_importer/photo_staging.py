@@ -1,4 +1,3 @@
-
 # =============================================================================
 #
 # Filesystem Importer
@@ -63,26 +62,6 @@ def _copy_without_overwriting(source: Path, destination: Path) -> None:
             ) from exc
         raise
 
-
-def _choose_staged_path(source_path: Path, photos_directory: Path) -> Path:
-    """Choose the original filename or a numbered alternative."""
-    original_name = source_path.name
-    candidate = photos_directory / original_name
-
-    if not candidate.exists():
-        return candidate
-
-    stem = source_path.stem
-    suffix = source_path.suffix
-    number = 2
-
-    while True:
-        candidate = photos_directory / f"{stem}_{number}{suffix}"
-        if not candidate.exists():
-            return candidate
-        number += 1
-
-
 def _choose_staged_path(source_path: Path, photos_directory: Path) -> Path:
     """Choose the original filename, adding a number if it is already used."""
     candidate = photos_directory / source_path.name
@@ -124,6 +103,13 @@ def stage_and_test_photo(source_path: Path, photos_directory: Path) -> PhotoStag
         except FileExistsError:
             # Another file appeared after we chose the name. Try again.
             logger.debug("Staging filename collision; retrying: %s", staged_path)
+        except OSError:
+            logger.exception(
+                "Failed to copy photo into staging: %s -> %s",
+                source_path,
+                staged_path,
+            )
+            raise
 
     try:
         capability = check_usercomment_capability(staged_path)
@@ -158,4 +144,3 @@ def stage_and_test_photo(source_path: Path, photos_directory: Path) -> PhotoStag
         reason,
     )
     return PhotoStagingResult(success=False, reason=reason)
-

@@ -1,4 +1,3 @@
-
 # =============================================================================
 #
 # Filesystem Importer
@@ -66,6 +65,10 @@ def discover_workspace() -> Path:
         ) from exc
 
     if not isinstance(settings, dict):
+        logger.error(
+            "Photo Manager settings must contain a JSON object: %s",
+            settings_file,
+        )
         raise WorkspaceDiscoveryError(
             "Photo Manager settings.json must contain a JSON object."
         )
@@ -73,6 +76,11 @@ def discover_workspace() -> Path:
     workspace_value = settings.get(WORKSPACE_SETTING)
 
     if not isinstance(workspace_value, str) or not workspace_value.strip():
+        logger.error(
+            "Photo Manager settings must define a non-empty '%s' value: %s",
+            WORKSPACE_SETTING,
+            settings_file,
+        )
         raise WorkspaceDiscoveryError(
             f"Photo Manager settings must define a non-empty "
             f"'{WORKSPACE_SETTING}' value."
@@ -81,6 +89,10 @@ def discover_workspace() -> Path:
     workspace = Path(workspace_value).expanduser()
 
     if not workspace.is_absolute():
+        logger.error(
+            "Configured Photo Manager workspace path is not absolute: %s",
+            workspace,
+        )
         raise WorkspaceDiscoveryError(
             "The configured Photo Manager workspace path must be absolute."
         )

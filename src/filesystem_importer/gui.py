@@ -36,6 +36,7 @@ from filesystem_importer.event_name_dialog import EventNameDialog
 from filesystem_importer.checkpoint_writer import write_initial_checkpoint
 from filesystem_importer.checkpoint_reader import read_checkpoint
 from filesystem_importer.staging_audit import audit_staging_directory
+from filesystem_importer.import_loop import initialise_progress
 
 logger = get_logger(__name__)
 
@@ -353,30 +354,59 @@ class FilesystemImporterWindow(QMainWindow):
             )
             return
 
+
         self.checkpoint_path = checkpoint_path
 
-        details = [
-            f"Source: {self.scan_result.source_directory}",
-            f"Event Name: {self.event_name}",
-            "",
-            "Initial checkpoint created:",
-            str(checkpoint_path),
-            "",
-            "No photos have been imported or modified.",
-            "You can close the importer at this stage.",
-        ]
+        try:
+            checkpoint, scan_result = read_checkpoint(checkpoint_path)
+        except (OSError, ValueError) as exc:
+            logger.exception(
+                "Could not reload the newly created checkpoint."
+            )
+            self.status_heading.setText("Checkpoint created")
+            self.status_detail.setText(
+                f"The initial checkpoint was created at:\n"
+                f"{checkpoint_path}\n\n"
+                "However, it could not be reloaded for progress "
+                f"initialisation:\n\n{exc}"
+            )
+            self.primary_button.setText("Checkpoint Created")
+            self.primary_button.setEnabled(False)
+            return
 
-        self.status_heading.setText("Initial checkpoint created")
-        self.status_detail.setText("\n".join(details))
-        self.primary_button.setText("Initial Checkpoint Created")
+        self.scan_result = scan_result
+        self.start_import(checkpoint)
+
+
+
+    def start_import(self, checkpoint):
+        """Enter the import workflow and display its current progress."""
+        progress = initialise_progress(checkpoint)
+
+        self.status_heading.setText("Import progress")
+        self.status_detail.setText(
+            f"Event: {self.event_name}\n"
+            f"Source: {self.scan_result.source_directory}\n\n"
+            f"Total candidates: {progress.total}\n"
+            f"Processed: {progress.processed}\n"
+            f"Successful: {progress.successful}\n"
+            f"Failed: {progress.failed}\n"
+            f"Remaining: {progress.remaining}"
+        )
+
+        self.primary_button.setText("Import Ready")
         self.primary_button.setEnabled(False)
         self.secondary_button.hide()
 
         logger.info(
-            "Initial checkpoint created successfully: %s",
-            checkpoint_path,
+            "Import progress initialised: total=%d, processed=%d, "
+            "successful=%d, failed=%d, remaining=%d",
+            progress.total,
+            progress.processed,
+            progress.successful,
+            progress.failed,
+            progress.remaining,
         )
-
 
 
     def _on_primary_clicked(self):
@@ -395,8 +425,6 @@ class FilesystemImporterWindow(QMainWindow):
             else:
                 self._create_checkpoint()
             return
-
-
 
         if self.partial_import is not None:
             logger.info("Resume requested by user.")
@@ -472,20 +500,7 @@ class FilesystemImporterWindow(QMainWindow):
                 scan_result.source_directory,
             )
 
-            self.status_heading.setText(
-                "Partial import validated"
-            )
-            self.status_detail.setText(
-                f"Event: {self.event_name}\n"
-                f"Source: {scan_result.source_directory}\n"
-                f"Photos found: {len(scan_result.candidate_files)}\n\n"
-                "The saved import state has been restored. "
-                "Photo processing is not yet implemented."
-            )
-
-            self.primary_button.setText("Checkpoint Validated")
-            self.primary_button.setEnabled(False)
-            self.secondary_button.hide()
+            self.start_import(checkpoint)
             return
 
 

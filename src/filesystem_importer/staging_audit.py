@@ -1,4 +1,3 @@
-
 # =============================================================================
 #
 # Filesystem Importer
@@ -45,11 +44,16 @@ def audit_staging_directory(
     photos_directory = Path(photos_directory)
 
     if not photos_directory.is_dir():
+        logger.error(
+            "Staging photos directory does not exist: %s",
+            photos_directory,
+        )
         raise ValueError(
             f"The staging photos directory does not exist: {photos_directory}"
         )
 
     if not isinstance(photo_records, list):
+        logger.error("Checkpoint photos value is not a list.")
         raise ValueError("The checkpoint photos value must be a list.")
 
     recorded_filenames: set[str] = set()
@@ -57,6 +61,7 @@ def audit_staging_directory(
     # Validate all records before touching the filesystem.
     for index, record in enumerate(photo_records):
         if not isinstance(record, dict):
+            logger.error("Photo record %d is not a JSON object.", index)
             raise ValueError(
                 f"Photo record {index} must be a JSON object."
             )
@@ -64,6 +69,10 @@ def audit_staging_directory(
         filename = record.get("file")
 
         if not isinstance(filename, str):
+            logger.error(
+                "Photo record %d has a missing or invalid file value.",
+                index,
+            )
             raise ValueError(
                 f"Photo record {index} has a missing or invalid file value."
             )
@@ -72,12 +81,21 @@ def audit_staging_directory(
             continue
 
         if Path(filename).name != filename or filename in {".", ".."}:
+            logger.error(
+                "Photo record %d has an invalid staging filename: %r",
+                index,
+                filename,
+            )
             raise ValueError(
                 f"Photo record {index} has an invalid staging filename: "
                 f"{filename!r}"
             )
 
         if filename in recorded_filenames:
+            logger.error(
+                "Multiple photo records refer to the same filename: %r",
+                filename,
+            )
             raise ValueError(
                 f"Multiple photo records refer to the same filename: "
                 f"{filename!r}"
@@ -91,6 +109,11 @@ def audit_staging_directory(
             key=lambda path: (path.name.casefold(), path.name),
         )
     except OSError as exc:
+        logger.error(
+            "Could not inspect staging photos directory %s: %s",
+            photos_directory,
+            exc,
+        )
         raise ValueError(
             f"The staging photos directory could not be inspected: {exc}"
         ) from exc
@@ -101,18 +124,30 @@ def audit_staging_directory(
     # Only ordinary files can be safely classified as orphaned photos.
     for entry in entries:
         if entry.is_symlink():
+            logger.error(
+                "Unexpected symbolic link in staging photos directory: %s",
+                entry,
+            )
             raise ValueError(
                 f"Unexpected symbolic link in staging photos directory: "
                 f"{entry.name}"
             )
 
         if entry.is_dir():
+            logger.error(
+                "Unexpected subdirectory in staging photos directory: %s",
+                entry,
+            )
             raise ValueError(
                 f"Unexpected subdirectory in staging photos directory: "
                 f"{entry.name}"
             )
 
         if not entry.is_file():
+            logger.error(
+                "Unexpected filesystem entry in staging photos directory: %s",
+                entry,
+            )
             raise ValueError(
                 f"Unexpected filesystem entry in staging photos directory: "
                 f"{entry.name}"

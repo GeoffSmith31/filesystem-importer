@@ -1,4 +1,3 @@
-
 # =============================================================================
 #
 # Filesystem Importer
@@ -17,7 +16,10 @@ import hashlib
 import json
 from typing import Any
 
+from filesystem_importer.app_logging import get_logger
 from filesystem_importer.file_discovery import ScanResult
+
+logger = get_logger(__name__)
 
 
 FINGERPRINT_ALGORITHM = "sha256"
@@ -33,6 +35,10 @@ def build_source_manifest(scan_result: ScanResult) -> dict[str, Any]:
     source_directory = scan_result.source_directory
 
     if scan_result.scan_errors:
+        logger.error(
+            "Cannot fingerprint source directory because scan errors occurred: %s",
+            source_directory,
+        )
         raise ValueError(
             "Cannot fingerprint a source directory with scan errors."
         )
@@ -49,6 +55,11 @@ def build_source_manifest(scan_result: ScanResult) -> dict[str, Any]:
                     f"Candidate path is no longer a file: {file_path}"
                 )
         except (OSError, ValueError) as exc:
+            logger.error(
+                "Cannot inspect candidate file while building source manifest: %s (%s)",
+                file_path,
+                exc,
+            )
             raise ValueError(
                 f"Cannot inspect candidate file: {file_path}"
             ) from exc
@@ -88,5 +99,12 @@ def build_source_manifest(scan_result: ScanResult) -> dict[str, Any]:
     manifest["fingerprint"] = hashlib.sha256(
         canonical_manifest
     ).hexdigest()
+
+    logger.info(
+        "Source manifest created: %s; candidates=%d; fingerprint=%s",
+        source_directory,
+        len(candidate_files),
+        manifest["fingerprint"],
+    )
 
     return manifest
