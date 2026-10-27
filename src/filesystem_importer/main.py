@@ -17,14 +17,18 @@ import argparse
 import logging
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from filesystem_importer.app_logging import (
     configure_logging,
     get_logger,
 )
 from filesystem_importer.constants import APP_NAME
+from filesystem_importer.geocoding import configure_geocoding
+from filesystem_importer.geocoding_rate_limit import geocoding_rate_limiter
 from filesystem_importer.gui import FilesystemImporterWindow
+from filesystem_importer.settings import get_settings_path, load_settings
+from filesystem_importer.settings_dialog import SettingsDialog
 from filesystem_importer.startup_check import (
     CLEAN,
     INSPECTION_ERROR,
@@ -38,6 +42,36 @@ from filesystem_importer.workspace_discovery import (
 )
 
 logger = get_logger(__name__)
+
+
+def obtain_settings(parent=None):
+    """Load settings or request them from the user on first run."""
+
+    settings_path = get_settings_path()
+    settings = load_settings(settings_path)
+
+    # A missing file or missing contact email means configuration is needed.
+    # Invalid existing settings are returned as defaults by load_settings(),
+    # so they will also require the user to configure settings again.
+    if settings_path.exists() and settings.user_agent:
+        logger.info("Existing application settings are available.")
+        return settings
+
+    logger.info("Application settings require user configuration.")
+
+    dialog = SettingsDialog(settings, parent)
+
+    if dialog.exec() != dialog.DialogCode.Accepted:
+        logger.warning("Application settings configuration was cancelled.")
+        QMessageBox.critical(
+            parent,
+            APP_NAME,
+            "The application is unable to proceed without valid settings.\n\n"
+            "No importing session has been started.",
+        )
+        return None
+
+    return dialog.settings
 
 
 def initialise_window(window: FilesystemImporterWindow) -> None:
@@ -55,7 +89,10 @@ def initialise_window(window: FilesystemImporterWindow) -> None:
     staging_directory = workspace / "Importers" / "Filesystem"
     window.staging_directory = staging_directory
 
-    logger.info("Filesystem Importer staging directory: %s", staging_directory)
+    logger.info(
+        "Filesystem Importer staging directory: %s",
+        staging_directory,
+    )
 
     result = inspect_staging_directory(staging_directory)
 
@@ -110,6 +147,25 @@ def main() -> None:
 
     app = QApplication(sys.argv[:1])
 
+    settings = obtain_settings()
+
+    if settings is None:
+        logger.info(
+            "%s startup cancelled because settings were not configured.",
+            APP_NAME,
+        )
+        return
+
+    configure_geocoding(settings)
+    geocoding_rate_limiter.set_min_interval_seconds(
+        settings.minimum_request_interval_seconds
+    )
+
+    logger.info(
+        "Geocoding configured with a minimum request interval of %.1f seconds.",
+        settings.minimum_request_interval_seconds,
+    )
+
     window = FilesystemImporterWindow()
     initialise_window(window)
     window.show()
@@ -127,3 +183,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

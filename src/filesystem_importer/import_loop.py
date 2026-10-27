@@ -16,7 +16,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from datetime import datetime, timezone
 from filesystem_importer.photo_staging import (
     PhotoStagingResult,
@@ -164,34 +164,85 @@ def build_failed_photo_record(
     )
 
 
+
 def process_candidate(
     source_path: Path,
     photos_directory: Path,
     event_name: str,
-) -> dict[str, Any] | None:
-    """Process one candidate."""
+    directory_classifications: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Stage one candidate and build its photo record.
 
-    logger.debug("Processing candidate: %s", source_path)
+    Directory ancestry and metadata resolution are logged as placeholders
+    until their implementations are available.
+    """
+    logger.info("Processing candidate: %s", source_path)
 
     result = stage_candidate(source_path, photos_directory)
 
     if not result.success:
         logger.info(
-            "Building failure record for candidate: %s",
+            "Candidate staging failed; the staged copy has been removed. "
+            "Building failure record: source=%s, event=%s, reason=%s",
             source_path,
+            event_name,
+            result.reason,
         )
         return build_failed_photo_record(source_path, event_name)
 
+    staged_filename = result.staged_filename
+
     logger.info(
-        "Candidate staged successfully; metadata resolution is pending: %s",
+        "Directory ancestry check to be implemented: "
+        "source_path=%s, event=%s, classifications=%s",
         source_path,
+        event_name,
+        directory_classifications,
     )
-    return None
+
+    logger.info(
+        "Metadata to be determined: source_path=%s, staged_filename=%s, "
+        "event=%s",
+        source_path,
+        staged_filename,
+        event_name,
+    )
+
+    logger.info(
+        "Building successful photo record with available values: "
+        "guid=%s, downloaded=True, file=%s, event=%s; "
+        "metadata fields will retain their defined defaults.",
+        source_path.resolve(),
+        staged_filename,
+        event_name,
+    )
+
+    return build_photo_record(
+        source_path=source_path,
+        downloaded=True,
+        file=staged_filename,
+        event=event_name,
+    )
+
+
 
 
 def update_progress_display(progress: ImportProgress) -> None:
-    """Update the GUI with the latest progress."""
-    raise NotImplementedError
+    """Log the current import progress.
+
+    Live GUI updates will be connected when the import loop is integrated
+    with the main window.
+    """
+    logger.info(
+        "Import progress: total=%d, processed=%d, successful=%d, "
+        "failed=%d, remaining=%d.",
+        progress.total,
+        progress.processed,
+        progress.successful,
+        progress.failed,
+        progress.remaining,
+    )
+
 
 
 def save_recovery_checkpoint(
@@ -209,18 +260,15 @@ def save_recovery_checkpoint(
     logger.info("Recovery checkpoint saved: %s", checkpoint_path)
 
 
+
 def run_import_loop(
     checkpoint: dict[str, Any],
     candidate_paths: list[Path],
     photos_directory: Path,
     checkpoint_path: Path,
+    progress_callback: Callable[[ImportProgress], None] | None = None,
 ) -> ImportProgress:
-    """Process failed candidates until a successful candidate needs metadata.
-
-    Failed candidates receive complete records and are appended to the
-    checkpoint. Successful candidates stop processing until metadata
-    resolution has been implemented.
-    """
+    """Process candidates, record each outcome, and save recovery progress."""
     logger.info(
         "Starting import loop: %d candidate paths; checkpoint %s.",
         len(candidate_paths),
@@ -228,7 +276,6 @@ def run_import_loop(
     )
 
     progress = initialise_progress(checkpoint)
-    update_progress_display(progress)
 
     if len(candidate_paths) != progress.total:
         logger.error(
@@ -242,6 +289,10 @@ def run_import_loop(
         )
 
     event_name = checkpoint["workspace"]["event"]
+    importer_data = checkpoint["filesystem_importer"]
+    directory_classifications = importer_data.get(
+        "directory_classifications", {}
+    )
 
     logger.info(
         "Import loop resuming at candidate %d of %d.",
@@ -249,10 +300,21 @@ def run_import_loop(
         progress.total,
     )
 
-    for source_path in candidate_paths[progress.processed:]:
+    for index, source_path in enumerate(
+        candidate_paths[progress.processed:],
+        start=progress.processed + 1,
+    ):
+
+        # Progress is updated only at the start of each iteration.
+        # Never update progress after processing or saving a candidate.
+        update_progress_display(progress)
+
+        if progress_callback is not None:
+            progress_callback(progress)
+
         logger.info(
             "Processing import candidate %d of %d: %s",
-            progress.processed + 1,
+            index,
             progress.total,
             source_path,
         )
@@ -261,33 +323,31 @@ def run_import_loop(
             source_path=source_path,
             photos_directory=photos_directory,
             event_name=event_name,
+            directory_classifications=directory_classifications,
         )
 
-        if record is None:
-            logger.warning(
-                "Candidate staged successfully but cannot yet be recorded "
-                "because metadata resolution is not implemented: %s",
-                source_path,
-            )
-            raise NotImplementedError(
-                "Metadata resolution is not implemented; "
-                "the successful candidate has been staged but not recorded."
-            )
-
         checkpoint["photos"].append(record)
-        progress = initialise_progress(checkpoint)
-        update_progress_display(progress)
 
         logger.info(
-            "Failed candidate recorded: %s (%d of %d processed)",
-            source_path,
-            progress.processed,
-            progress.total,
+            "Photo record appended: candidate=%d, guid=%s, "
+            "downloaded=%s, file=%s.",
+            index,
+            record["guid"],
+            record["downloaded"],
+            record["file"],
         )
 
         save_recovery_checkpoint(
             checkpoint=checkpoint,
             checkpoint_path=checkpoint_path,
+        )
+
+        progress = initialise_progress(checkpoint)
+
+        logger.info(
+            "Candidate %d of %d recorded and checkpoint saved.",
+            index,
+            progress.total,
         )
 
     logger.info(
@@ -300,6 +360,7 @@ def run_import_loop(
     )
 
     return progress
+
 
 
 def build_photo_record(

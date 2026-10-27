@@ -20,6 +20,7 @@ APP_VERSION = "0.1.0"
 SCHEMA_VERSION = 2
 IMPORTER_ID = "filesystem-importer"
 SOURCE_NAME = "Filesystem"
+DEVELOPER_EMAIL = "dev.photomanager@gmail.com"
 
 # Checkpoint and project asset directory names.
 CHECKPOINT_FILENAME = "importing.json"

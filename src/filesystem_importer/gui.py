@@ -14,7 +14,7 @@
 """Graphical user interface for Filesystem Importer."""
 
 import shutil
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -36,11 +36,48 @@ from filesystem_importer.event_name_dialog import EventNameDialog
 from filesystem_importer.checkpoint_writer import write_initial_checkpoint
 from filesystem_importer.checkpoint_reader import read_checkpoint
 from filesystem_importer.staging_audit import audit_staging_directory
-from filesystem_importer.import_loop import initialise_progress
+from filesystem_importer.import_loop import initialise_progress, run_import_loop
 
 logger = get_logger(__name__)
 
+class ImportWorker(QObject):
+    """Run the import loop in a background thread."""
 
+    progress_updated = Signal(object)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        checkpoint,
+        candidate_paths,
+        photos_directory,
+        checkpoint_path,
+    ):
+        super().__init__()
+        self.checkpoint = checkpoint
+        self.candidate_paths = candidate_paths
+        self.photos_directory = photos_directory
+        self.checkpoint_path = checkpoint_path
+
+    @Slot()
+    def run(self):
+        """Execute the import loop and report its outcome."""
+        try:
+            progress = run_import_loop(
+                checkpoint=self.checkpoint,
+                candidate_paths=self.candidate_paths,
+                photos_directory=self.photos_directory,
+                checkpoint_path=self.checkpoint_path,
+                progress_callback=self.progress_updated.emit,
+            )
+        except Exception as exc:
+            logger.exception("Import worker failed.")
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(progress)
+            
+            
 class FilesystemImporterWindow(QMainWindow):
     """Main application window."""
 
@@ -59,6 +96,8 @@ class FilesystemImporterWindow(QMainWindow):
         self.event_name = None
         self.staging_directory: Path | None = None
         self.checkpoint_path: Path | None = None
+        self.import_thread = None
+        self.import_worker = None
         self._build_ui()
         self.show_normal_state()
 
@@ -377,10 +416,46 @@ class FilesystemImporterWindow(QMainWindow):
         self.scan_result = scan_result
         self.start_import(checkpoint)
 
+    @Slot(object)
+    def _on_import_progress(self, progress):
+        """Display progress reported by the import worker."""
+        self.status_detail.setText(
+            f"Event: {self.event_name}\n"
+            f"Source: {self.scan_result.source_directory}\n\n"
+            f"Total candidates: {progress.total}\n"
+            f"Processed: {progress.processed}\n"
+            f"Successful: {progress.successful}\n"
+            f"Failed: {progress.failed}\n"
+            f"Remaining: {progress.remaining}"
+        )
+
+    @Slot(object)
+    def _on_import_finished(self, progress):
+        """Handle successful completion of the import loop."""
+        logger.info(
+            "Import loop finished: total=%d, processed=%d, "
+            "successful=%d, failed=%d, remaining=%d",
+            progress.total,
+            progress.processed,
+            progress.successful,
+            progress.failed,
+            progress.remaining,
+        )
+
+        # The next workflow stage will be connected here.
+        self.status_heading.setText("Import finished")
+
+    @Slot(str)
+    def _on_import_failed(self, message):
+        """Handle an error reported by the import worker."""
+        logger.error("Import failed: %s", message)
+        self.status_heading.setText("Import failed")
+        self.status_detail.setText(message)
+        self.primary_button.setEnabled(True)
 
 
     def start_import(self, checkpoint):
-        """Enter the import workflow and display its current progress."""
+        """Start the import loop in a background thread."""
         progress = initialise_progress(checkpoint)
 
         self.status_heading.setText("Import progress")
@@ -394,12 +469,12 @@ class FilesystemImporterWindow(QMainWindow):
             f"Remaining: {progress.remaining}"
         )
 
-        self.primary_button.setText("Import Ready")
+        self.primary_button.setText("Importing...")
         self.primary_button.setEnabled(False)
         self.secondary_button.hide()
 
         logger.info(
-            "Import progress initialised: total=%d, processed=%d, "
+            "Starting import worker: total=%d, processed=%d, "
             "successful=%d, failed=%d, remaining=%d",
             progress.total,
             progress.processed,
@@ -407,6 +482,35 @@ class FilesystemImporterWindow(QMainWindow):
             progress.failed,
             progress.remaining,
         )
+
+        if self.checkpoint_path is None:
+            raise ValueError("Checkpoint path is not configured.")
+
+        if self.staging_directory is None:
+            raise ValueError("Staging directory is not configured.")
+
+        self.import_thread = QThread(self)
+        self.import_worker = ImportWorker(
+            checkpoint=checkpoint,
+            candidate_paths=list(self.scan_result.candidate_files),
+            photos_directory=self.staging_directory / "photos",
+            checkpoint_path=self.checkpoint_path,
+        )
+        self.import_worker.moveToThread(self.import_thread)
+
+        self.import_thread.started.connect(self.import_worker.run)
+        self.import_worker.progress_updated.connect(
+            self._on_import_progress
+        )
+        self.import_worker.finished.connect(self._on_import_finished)
+        self.import_worker.failed.connect(self._on_import_failed)
+
+        self.import_worker.finished.connect(self.import_thread.quit)
+        self.import_worker.failed.connect(self.import_thread.quit)
+        self.import_thread.finished.connect(self.import_worker.deleteLater)
+        self.import_thread.finished.connect(self.import_thread.deleteLater)
+
+        self.import_thread.start()
 
 
     def _on_primary_clicked(self):

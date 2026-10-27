@@ -13,14 +13,14 @@
 
 """Gather source information for one photo's metadata resolution."""
 
+import calendar
+import piexif
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import piexif
 from piexif import helper
-
 from filesystem_importer.app_logging import get_logger
 
 logger = get_logger(__name__)
@@ -52,11 +52,18 @@ class PhotoMetadataContext:
     gps_longitude: Any = None
     gps_longitude_ref: str | None = None
 
-    # Derived values. None means unavailable, invalid or not yet resolved.
+    # Inherited values and the original directory names they came from.
     event_ancestor: str | None = None
+    event_ancestor_folder: str | None = None
+
     year_ancestor: str | None = None
+    year_ancestor_folder: str | None = None
+
     location_ancestor: str | None = None
+    location_ancestor_folder: str | None = None
+
     info_ancestor: str | None = None
+    info_ancestor_folder: str | None = None
 
     event_comment: str | None = None
     year_comment: str | None = None
@@ -192,6 +199,53 @@ def gather_photo_metadata_context(
 
     exif_values = _read_exif_values(staged_path)
 
+
+    # Resolve directory inheritance independently for each category.
+    event_inheritance = _find_directory_ancestor(
+        relative_directory,
+        source_directory,
+        directory_classifications,
+        "Event",
+    )
+    event_ancestor, event_ancestor_folder = (
+        event_inheritance if event_inheritance is not None
+        else (None, None)
+    )
+
+    year_inheritance = _find_directory_ancestor(
+        relative_directory,
+        source_directory,
+        directory_classifications,
+        "Year",
+    )
+    year_ancestor, year_ancestor_folder = (
+        year_inheritance if year_inheritance is not None
+        else (None, None)
+    )
+
+    location_inheritance = _find_directory_ancestor(
+        relative_directory,
+        source_directory,
+        directory_classifications,
+        "Location",
+    )
+    location_ancestor, location_ancestor_folder = (
+        location_inheritance if location_inheritance is not None
+        else (None, None)
+    )
+
+    info_inheritance = _find_directory_ancestor(
+        relative_directory,
+        source_directory,
+        directory_classifications,
+        "Info",
+    )
+    info_ancestor, info_ancestor_folder = (
+        info_inheritance if info_inheritance is not None
+        else (None, None)
+    )
+
+
     logger.debug(
         "Gathered metadata inputs for source=%s staged=%s",
         source_path,
@@ -206,6 +260,276 @@ def gather_photo_metadata_context(
         relative_directory=relative_directory,
         directory_classifications=dict(directory_classifications),
         workspace_event=workspace_event,
+        event_ancestor=event_ancestor,
+        event_ancestor_folder=event_ancestor_folder,
+        year_ancestor=year_ancestor,
+        year_ancestor_folder=year_ancestor_folder,
+        location_ancestor=location_ancestor,
+        location_ancestor_folder=location_ancestor_folder,
+        info_ancestor=info_ancestor,
+        info_ancestor_folder=info_ancestor_folder,
         **exif_values,
     )
+
+
+def _normalise_inherited_year(folder_name: str) -> str | None:
+    """Validate and normalise a directory name used as an inherited Year."""
+    value = folder_name.strip()
+
+    logger.debug(
+        "Validating inherited Year folder name: %r",
+        folder_name,
+    )
+
+    if not value:
+        logger.debug("Rejected inherited Year: folder name is empty.")
+        return None
+
+    # A four-digit calendar year.
+    if re.fullmatch(r"\d{4}", value):
+        year = int(value)
+
+        if 1 <= year <= 9999:
+            logger.debug(
+                "Accepted inherited Year %r, normalised to %r.",
+                folder_name,
+                value,
+            )
+            return value
+
+        logger.debug(
+            "Rejected inherited Year %r: year is outside the valid range.",
+            folder_name,
+        )
+        return None
+
+    # A date in day-month-year form, normalised to DD-Mmm-YYYY.
+    date_match = re.fullmatch(
+        r"(\d{1,2})-([A-Za-z]+)-(\d{4})",
+        value,
+    )
+
+    if date_match:
+        day_text, month_text, year_text = date_match.groups()
+
+        month_numbers = {
+            name.casefold(): number
+            for number, name in enumerate(calendar.month_name)
+            if name
+        }
+        month_numbers.update({
+            name.casefold(): number
+            for number, name in enumerate(calendar.month_abbr)
+            if name
+        })
+        month_numbers["sept"] = 9
+
+        month = month_numbers.get(month_text.casefold())
+
+        if month is None:
+            logger.debug(
+                "Rejected inherited Year %r: unrecognised month %r.",
+                folder_name,
+                month_text,
+            )
+            return None
+
+        try:
+            from datetime import date
+
+            parsed_date = date(
+                int(year_text),
+                month,
+                int(day_text),
+            )
+        except ValueError:
+            logger.debug(
+                "Rejected inherited Year %r: invalid calendar date.",
+                folder_name,
+            )
+            return None
+
+        normalised = (
+            f"{parsed_date.day:02d}-"
+            f"{calendar.month_abbr[parsed_date.month]}-"
+            f"{parsed_date.year:04d}"
+        )
+
+        logger.debug(
+            "Accepted inherited Year %r, normalised to %r.",
+            folder_name,
+            normalised,
+        )
+        return normalised
+
+    # Full month names and recognised abbreviations.
+    month_names = {
+        name.casefold(): name
+        for name in calendar.month_name
+        if name
+    }
+    month_names.update({
+        name.casefold(): calendar.month_name[number]
+        for number, name in enumerate(calendar.month_abbr)
+        if name
+    })
+    month_names["sept"] = "September"
+
+    month = month_names.get(value.casefold())
+
+    if month is not None:
+        logger.debug(
+            "Accepted inherited Year %r, normalised to %r.",
+            folder_name,
+            month,
+        )
+        return month
+
+    # Full weekday names and recognised abbreviations.
+    day_names = {
+        name.casefold(): name
+        for name in calendar.day_name
+    }
+    day_names.update({
+        name.casefold(): calendar.day_name[number]
+        for number, name in enumerate(calendar.day_abbr)
+    })
+
+    day = day_names.get(value.casefold())
+
+    if day is not None:
+        logger.debug(
+            "Accepted inherited Year %r, normalised to %r.",
+            folder_name,
+            day,
+        )
+        return day
+
+    # Seasons and agreed temporal descriptors.
+    accepted_descriptors = {
+        "autumn": "Autumn",
+        "spring": "Spring",
+        "summer": "Summer",
+        "winter": "Winter",
+        "morning": "Morning",
+        "afternoon": "Afternoon",
+        "night": "Night",
+        "early": "Early",
+        "late": "Late",
+        "day": "Day",
+    }
+
+    normalised = accepted_descriptors.get(value.casefold())
+
+    if normalised is not None:
+        logger.debug(
+            "Accepted inherited Year %r, normalised to %r.",
+            folder_name,
+            normalised,
+        )
+        return normalised
+
+    logger.debug(
+        "Rejected inherited Year %r: unsupported format.",
+        folder_name,
+    )
+    return None
+
+
+def _find_directory_ancestor(
+    relative_directory: Path,
+    source_directory: Path,
+    directory_classifications: dict[str, str],
+    category: str,
+) -> tuple[str, str] | None:
+    """Find the nearest usable directory value for a metadata category.
+
+    Return (normalised_value, original_folder_name), or None if no
+    usable classified directory is found.
+
+    Classifications are keyed by directory level. The source root is
+    level 1, and its immediate child directories are level 2.
+    """
+    current_directory = relative_directory
+
+    logger.debug(
+        "Searching for inherited %s from relative directory %s.",
+        category,
+        relative_directory,
+    )
+
+    while True:
+        level = len(current_directory.parts) + 1
+        classification = directory_classifications.get(str(level))
+
+        logger.debug(
+            "Checking directory %s at level %d: classification=%r, "
+            "requested category=%r.",
+            current_directory,
+            level,
+            classification,
+            category,
+        )
+
+        if classification == category:
+            if current_directory == Path("."):
+                folder_name = source_directory.name
+            else:
+                folder_name = current_directory.name
+
+            logger.debug(
+                "Found %s classification at level %d: folder=%r.",
+                category,
+                level,
+                folder_name,
+            )
+
+            if category == "Year":
+                normalised_value = _normalise_inherited_year(folder_name)
+
+                if normalised_value is not None:
+                    logger.info(
+                        "Inherited Year resolved to %r from folder %r.",
+                        normalised_value,
+                        folder_name,
+                    )
+                    return normalised_value, folder_name
+
+                logger.debug(
+                    "Continuing Year search because folder %r "
+                    "contains an invalid Year value.",
+                    folder_name,
+                )
+
+            elif folder_name.strip():
+                logger.info(
+                    "Inherited %s resolved to %r from folder %r.",
+                    category,
+                    folder_name,
+                    folder_name,
+                )
+                return folder_name, folder_name
+
+            else:
+                logger.debug(
+                    "Skipping %s folder with an empty name.",
+                    category,
+                )
+
+        if current_directory == Path("."):
+            break
+
+        current_directory = current_directory.parent
+
+        logger.debug(
+            "Moving up to parent directory: %s.",
+            current_directory,
+        )
+
+    logger.info(
+        "No usable inherited %s value found from %s.",
+        category,
+        relative_directory,
+    )
+    return None
 

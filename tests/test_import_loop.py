@@ -58,7 +58,8 @@ def test_process_candidate_creates_record_only_on_failure(tmp_path):
     assert record["file"] == ""
 
 
-def test_process_candidate_does_not_create_record_on_success(tmp_path):
+
+def test_process_candidate_builds_record_on_success(tmp_path):
     source = tmp_path / "source.jpg"
     photos = tmp_path / "photos"
     source.touch()
@@ -71,9 +72,22 @@ def test_process_candidate_does_not_create_record_on_success(tmp_path):
             staged_filename="source.jpg",
         ),
     ):
-        record = process_candidate(source, photos, "Test Event")
+        record = process_candidate(
+            source,
+            photos,
+            "Test Event",
+            {"1": "Event", "2": "Location"},
+        )
 
-    assert record is None
+    assert record["guid"] == str(source.resolve())
+    assert record["downloaded"] is True
+    assert record["file"] == "source.jpg"
+    assert record["event"] == "Test Event"
+    assert record["lat"] is None
+    assert record["lng"] is None
+    assert record["location"] == ""
+    assert record["info"] == ""
+
 
 
 def test_process_candidate_propagates_fatal_staging_error(tmp_path):
@@ -239,9 +253,25 @@ def test_process_candidate_requires_event_name():
         )
 
 
-def test_update_progress_display_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError):
-        update_progress_display(None)
+
+def test_update_progress_display_logs_progress(caplog):
+    from filesystem_importer.import_loop import ImportProgress
+
+    progress = ImportProgress(
+        total=3,
+        processed=1,
+        successful=1,
+        failed=0,
+        remaining=2,
+    )
+
+    with caplog.at_level("INFO"):
+        update_progress_display(progress)
+
+    assert "total=3" in caplog.text
+    assert "processed=1" in caplog.text
+    assert "remaining=2" in caplog.text
+
 
 
 def test_save_recovery_checkpoint_writes_checkpoint(tmp_path):
@@ -284,6 +314,7 @@ def test_run_import_loop_records_failed_candidate_and_saves_checkpoint(
     photos_directory = tmp_path / "photos"
     photos_directory.mkdir()
 
+
     failed_record = {
         "guid": str(candidate.resolve()),
         "downloaded": False,
@@ -320,6 +351,7 @@ def test_run_import_loop_records_failed_candidate_and_saves_checkpoint(
         source_path=candidate,
         photos_directory=photos_directory,
         event_name="Test Event",
+        directory_classifications={},
     )
     mock_display.assert_called()
     mock_save.assert_called_once_with(
@@ -393,7 +425,8 @@ def test_run_import_loop_skips_already_processed_candidates(tmp_path):
     assert mock_process.call_args_list[1].kwargs["source_path"] == candidates[2]
     assert mock_save.call_count == 2
     
-def test_run_import_loop_stops_when_successful_candidate_needs_metadata(
+
+def test_run_import_loop_records_successful_candidate_and_saves_checkpoint(
     tmp_path,
 ):
     candidate = tmp_path / "successful.jpg"
@@ -404,36 +437,54 @@ def test_run_import_loop_stops_when_successful_candidate_needs_metadata(
         "workspace": {"event": "Test Event"},
         "filesystem_importer": {
             "source_manifest": {"candidate_count": 1},
+            "directory_classifications": {"1": "Event"},
         },
         "photos": [],
+    }
+
+    successful_record = {
+        "guid": str(candidate.resolve()),
+        "downloaded": True,
+        "file": "successful.jpg",
     }
 
     with (
         patch(
             "filesystem_importer.import_loop.process_candidate",
-            return_value=None,
+            return_value=successful_record,
         ) as mock_process,
         patch(
             "filesystem_importer.import_loop.update_progress_display",
-        ),
+        ) as mock_display,
         patch(
             "filesystem_importer.import_loop.save_recovery_checkpoint",
         ) as mock_save,
     ):
-        with pytest.raises(
-            NotImplementedError,
-            match="Metadata resolution is not implemented",
-        ):
-            run_import_loop(
-                checkpoint=checkpoint,
-                candidate_paths=[candidate],
-                photos_directory=photos_directory,
-                checkpoint_path=tmp_path / "importing.json",
-            )
+        progress = run_import_loop(
+            checkpoint=checkpoint,
+            candidate_paths=[candidate],
+            photos_directory=photos_directory,
+            checkpoint_path=tmp_path / "importing.json",
+        )
 
-    assert checkpoint["photos"] == []
-    mock_process.assert_called_once()
-    mock_save.assert_not_called()
+    assert checkpoint["photos"] == [successful_record]
+    assert progress.processed == 1
+    assert progress.successful == 1
+    assert progress.failed == 0
+    assert progress.remaining == 0
+
+    mock_process.assert_called_once_with(
+        source_path=candidate,
+        photos_directory=photos_directory,
+        event_name="Test Event",
+        directory_classifications={"1": "Event"},
+    )
+    mock_display.assert_called()
+    mock_save.assert_called_once_with(
+        checkpoint=checkpoint,
+        checkpoint_path=tmp_path / "importing.json",
+    )
+
     
 def test_build_photo_record_contains_all_required_fields(tmp_path):
     source_path = tmp_path / "photo.jpg"

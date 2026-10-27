@@ -162,18 +162,33 @@ def test_missing_exif_values_are_none(
     assert context.gps_longitude_ref is None
 
 
+
 def test_derived_fields_start_as_none(
     photo_paths: tuple[Path, Path, Path],
 ) -> None:
     source_directory, source_path, staged_path = photo_paths
 
-    context = gather(source_directory, source_path, staged_path)
+    context = gather_photo_metadata_context(
+        source_path=source_path,
+        staged_path=staged_path,
+        source_directory=source_directory,
+        directory_classifications={
+            "1": "Ignore",
+            "2": "Ignore",
+            "3": "Ignore",
+        },
+        workspace_event="Workspace Event",
+    )
 
     for field in (
         "event_ancestor",
+        "event_ancestor_folder",
         "year_ancestor",
+        "year_ancestor_folder",
         "location_ancestor",
+        "location_ancestor_folder",
         "info_ancestor",
+        "info_ancestor_folder",
         "event_comment",
         "year_comment",
         "location_comment",
@@ -182,6 +197,7 @@ def test_derived_fields_start_as_none(
         "comment_components",
     ):
         assert getattr(context, field) is None
+
 
 
 def test_missing_source_file_raises_clear_error(
