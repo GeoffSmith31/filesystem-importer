@@ -48,6 +48,7 @@ def make_jpeg(path: Path, comment: str | None = None) -> Path:
 def test_success_keeps_staged_copy_and_leaves_source_unchanged(tmp_path):
     source = make_jpeg(tmp_path / "source.jpg", "Original")
     original_bytes = source.read_bytes()
+    original_comment = helper.UserComment.dump("Original")
     photos = tmp_path / "photos"
     photos.mkdir()
 
@@ -55,9 +56,19 @@ def test_success_keeps_staged_copy_and_leaves_source_unchanged(tmp_path):
 
     assert result.success is True
     assert result.staged_filename
+    assert result.original_comment == original_comment
     assert (photos / result.staged_filename).is_file()
     assert source.read_bytes() == original_bytes
 
+def test_success_returns_none_when_original_comment_is_absent(tmp_path):
+    source = make_jpeg(tmp_path / "source.jpg")
+    photos = tmp_path / "photos"
+    photos.mkdir()
+
+    result = stage_and_test_photo(source, photos)
+
+    assert result.success is True
+    assert result.original_comment is None
 
 def test_failed_capability_test_deletes_staged_copy(tmp_path, monkeypatch):
     source = tmp_path / "source.png"

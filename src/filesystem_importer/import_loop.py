@@ -27,6 +27,9 @@ from filesystem_importer.app_logging import get_logger
 from filesystem_importer.checkpoint_writer import (
     write_recovery_checkpoint,
 )
+from filesystem_importer.metadata_extraction import (
+    extract_usercomment_metadata,
+)
 
 logger = get_logger(__name__)
 
@@ -191,6 +194,21 @@ def process_candidate(
         return build_failed_photo_record(source_path, event_name)
 
     staged_filename = result.staged_filename
+    original_comment = result.original_comment
+    exif_metadata = extract_usercomment_metadata(original_comment)
+
+    logger.debug(
+        "UserComment extraction complete: "
+        "event=%s, year=%s, location=%s, info=%s",
+        exif_metadata.exif_event is not None,
+        exif_metadata.exif_year is not None,
+        exif_metadata.exif_location is not None,
+        exif_metadata.exif_info is not None,
+    )
+    logger.debug(
+        "Original UserComment available for metadata extraction: %s",
+        original_comment is not None,
+    )
 
     logger.info(
         "Directory ancestry check to be implemented: "

@@ -11,7 +11,7 @@
 #
 # =============================================================================
 
-"""Test whether a staged JPEG supports EXIF UserComment writing."""
+"""Test whether a staged image supports EXIF UserComment writing."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,10 +31,10 @@ class ExifCapabilityResult:
 
     supported: bool
     reason: str = ""
-
+    original_comment: bytes | None = None
 
 def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
-    """Test UserComment writing on a staged JPEG.
+    """Test UserComment writing on a staged image.
 
     The caller must pass a staged copy, never the source photo.
 
@@ -44,16 +44,6 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
     image_path = Path(image_path)
 
     logger.info("Starting EXIF UserComment capability test: %s", image_path)
-
-    if image_path.suffix.lower() not in {".jpg", ".jpeg"}:
-        logger.info(
-            "EXIF capability test skipped: unsupported file extension %s",
-            image_path.suffix,
-        )
-        return ExifCapabilityResult(
-            supported=False,
-            reason="EXIF capability testing is currently limited to JPEG.",
-        )
 
     try:
         original_exif = piexif.load(str(image_path))
@@ -110,7 +100,10 @@ def check_usercomment_capability(image_path: Path) -> ExifCapabilityResult:
             "EXIF UserComment capability test succeeded: %s",
             image_path,
         )
-        return ExifCapabilityResult(supported=True)
+        return ExifCapabilityResult(
+            supported=True,
+            original_comment=original_comment,
+        )
 
     except Exception as exc:
         logger.warning(

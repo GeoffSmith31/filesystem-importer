@@ -21,6 +21,9 @@ from filesystem_importer.import_loop import (
     build_failed_photo_record,
     build_photo_record,
 )
+from filesystem_importer.metadata_extraction import (
+    extract_usercomment_metadata,
+)
 
 
 def test_build_failed_photo_record_contains_required_fields(tmp_path):
@@ -60,17 +63,36 @@ def test_process_candidate_creates_record_only_on_failure(tmp_path):
 
 
 def test_process_candidate_builds_record_on_success(tmp_path):
+    from piexif import helper
+
     source = tmp_path / "source.jpg"
     photos = tmp_path / "photos"
     source.touch()
     photos.mkdir()
 
-    with patch(
-        "filesystem_importer.import_loop.stage_candidate",
-        return_value=PhotoStagingResult(
-            success=True,
-            staged_filename="source.jpg",
+    original_comment = helper.UserComment.dump(
+        "Test Event | 2024 | Paris | Family trip"
+    )
+    extracted_metadata = []
+
+    def capture_extraction(comment):
+        result = extract_usercomment_metadata(comment)
+        extracted_metadata.append(result)
+        return result
+
+    with (
+        patch(
+            "filesystem_importer.import_loop.stage_candidate",
+            return_value=PhotoStagingResult(
+                success=True,
+                staged_filename="source.jpg",
+                original_comment=original_comment,
+            ),
         ),
+        patch(
+            "filesystem_importer.import_loop.extract_usercomment_metadata",
+            side_effect=capture_extraction,
+        ) as extract_mock,
     ):
         record = process_candidate(
             source,
@@ -78,6 +100,14 @@ def test_process_candidate_builds_record_on_success(tmp_path):
             "Test Event",
             {"1": "Event", "2": "Location"},
         )
+
+    extract_mock.assert_called_once_with(original_comment)
+    assert len(extracted_metadata) == 1
+    extracted = extracted_metadata[0]
+    assert extracted.exif_event == "Test Event"
+    assert extracted.exif_year == "2024"
+    assert extracted.exif_location == "Paris"
+    assert extracted.exif_info == "Family trip"
 
     assert record["guid"] == str(source.resolve())
     assert record["downloaded"] is True

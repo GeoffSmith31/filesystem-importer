@@ -54,8 +54,8 @@ def test_capability_succeeds_and_restores_existing_comment(tmp_path):
     result = check_usercomment_capability(image_path)
 
     assert result.supported is True
+    assert result.original_comment == original_comment
     assert read_comment(image_path) == original_comment
-
 
 def test_capability_succeeds_and_removes_comment_when_originally_absent(tmp_path):
     image_path = make_jpeg(tmp_path / "absent.jpg")
@@ -65,17 +65,18 @@ def test_capability_succeeds_and_removes_comment_when_originally_absent(tmp_path
     result = check_usercomment_capability(image_path)
 
     assert result.supported is True
+    assert result.original_comment is None
     assert read_comment(image_path) is None
 
 
-def test_non_jpeg_is_reported_as_unsupported(tmp_path):
+def test_non_jpeg_is_tested_regardless_of_extension(tmp_path):
     image_path = tmp_path / "photo.webp"
     image_path.write_bytes(b"not a real WebP file")
 
     result = check_usercomment_capability(image_path)
 
     assert result.supported is False
-    assert "limited to JPEG" in result.reason
+    assert result.reason == "Given file is neither JPEG nor TIFF."
 
 
 def test_invalid_jpeg_is_reported_as_unsupported(tmp_path):

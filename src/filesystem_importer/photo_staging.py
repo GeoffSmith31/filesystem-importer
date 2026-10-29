@@ -34,7 +34,7 @@ class PhotoStagingResult:
     success: bool
     staged_filename: str = ""
     reason: str = ""
-
+    original_comment: bytes | None = None
 
 
 def _copy_without_overwriting(source: Path, destination: Path) -> None:
@@ -124,6 +124,7 @@ def stage_and_test_photo(source_path: Path, photos_directory: Path) -> PhotoStag
         return PhotoStagingResult(
             success=True,
             staged_filename=staged_path.name,
+            original_comment=capability.original_comment,
         )
 
     try:
