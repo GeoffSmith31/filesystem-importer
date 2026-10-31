@@ -101,7 +101,6 @@ def load_settings(settings_path: Path | None = None) -> AppSettings:
         )
         return AppSettings()
 
-    contact_email = geocoding.get("contact_email", "")
     interval = geocoding.get(
         "minimum_request_interval_seconds",
         DEFAULT_MINIMUM_REQUEST_INTERVAL_SECONDS,

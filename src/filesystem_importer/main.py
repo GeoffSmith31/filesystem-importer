@@ -50,10 +50,8 @@ def obtain_settings(parent=None):
     settings_path = get_settings_path()
     settings = load_settings(settings_path)
 
-    # A missing file or missing contact email means configuration is needed.
-    # Invalid existing settings are returned as defaults by load_settings(),
-    # so they will also require the user to configure settings again.
-    if settings_path.exists() and settings.user_agent:
+    # Request configuration on first run.
+    if settings_path.exists():
         logger.info("Existing application settings are available.")
         return settings
 
