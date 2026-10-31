@@ -89,6 +89,16 @@ def test_process_candidate_builds_record_on_success(tmp_path):
                 original_comment=original_comment,
             ),
         ),
+        
+        patch(
+            "filesystem_importer.metadata_extraction.year_validate",
+            return_value="2024",
+        ),
+        patch(
+            "filesystem_importer.metadata_extraction.location_validate",
+            return_value=True,
+        ),
+        
         patch(
             "filesystem_importer.import_loop.extract_usercomment_metadata",
             side_effect=capture_extraction,

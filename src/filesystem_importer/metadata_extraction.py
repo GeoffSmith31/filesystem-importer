@@ -4,6 +4,8 @@
 import re
 from dataclasses import dataclass
 from piexif import helper
+from filesystem_importer.geocoding import location_validate
+from filesystem_importer.metadata_validation import year_validate
 
 @dataclass(frozen=True)
 class ExifMetadata:
@@ -18,15 +20,16 @@ class ExifMetadata:
 def extract_usercomment_metadata(
     original_comment: bytes | None,
 ) -> ExifMetadata:
-    """Extract four probable metadata fields from an original UserComment.
+    """Extract and validate probable metadata fields from an EXIF UserComment.
 
     If the comment splits into exactly four fields, assign them in order:
     Event, Year, Location and Info.
 
-    If it does not split into exactly four fields, preserve the entire
-    comment as Info and leave the other fields undetermined.
+    Accept the extracted fields only when Year and Location validation
+    both succeed. Otherwise, preserve the entire original comment as Info.
 
-    This function extracts fields only; it does not validate their values.
+    Comments that do not split into exactly four fields are also preserved
+    in their entirety as Info.
     """
     if original_comment is None:
         return ExifMetadata()
@@ -41,10 +44,21 @@ def extract_usercomment_metadata(
     if len(fields) != 4:
         return ExifMetadata(exif_info=comment)
 
+    event = fields[0].strip()
+    year = fields[1].strip()
+    location = fields[2].strip()
+    info = fields[3].strip()
+
+    validated_year = year_validate(year)
+    validated_location = location_validate(location)
+
+    if validated_year is None or validated_location is not True:
+        return ExifMetadata(exif_info=comment)
+
     return ExifMetadata(
-        exif_event=fields[0].strip(),
-        exif_year=fields[1].strip(),
-        exif_location=fields[2].strip(),
-        exif_info=fields[3].strip(),
+        exif_event=event,
+        exif_year=validated_year,
+        exif_location=location,
+        exif_info=info,
     )
 
