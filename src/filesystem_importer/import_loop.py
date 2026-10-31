@@ -13,6 +13,7 @@
 
 """Control the filesystem photo-import loop."""
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,10 @@ from filesystem_importer.photo_staging import (
 from filesystem_importer.app_logging import get_logger
 from filesystem_importer.checkpoint_writer import (
     write_recovery_checkpoint,
+)
+from filesystem_importer.metadata_context import (
+    PhotoMetadataContext,
+    gather_photo_metadata_context,
 )
 from filesystem_importer.metadata_extraction import (
     extract_usercomment_metadata,
@@ -173,76 +178,440 @@ def process_candidate(
     photos_directory: Path,
     event_name: str,
     directory_classifications: Mapping[str, str] | None = None,
+    source_directory: Path | None = None,
 ) -> dict[str, Any]:
-    """Stage one candidate and build its photo record.
+    """Stage one candidate and populate its proposed metadata."""
 
-    Directory ancestry and metadata resolution are logged as placeholders
-    until their implementations are available.
-    """
     logger.info("Processing candidate: %s", source_path)
+
+    # Create the shared photo record once.
+    photo_record = build_photo_record(
+        source_path=source_path,
+        downloaded=False,
+        file="",
+        event="",
+    )
 
     result = stage_candidate(source_path, photos_directory)
 
     if not result.success:
         logger.info(
-            "Candidate staging failed; the staged copy has been removed. "
-            "Building failure record: source=%s, event=%s, reason=%s",
+            "Candidate staging failed; returning failure record: "
+            "source=%s, reason=%s",
             source_path,
-            event_name,
             result.reason,
         )
-        return build_failed_photo_record(source_path, event_name)
+        return photo_record
 
-    staged_filename = result.staged_filename
-    original_comment = result.original_comment
-    exif_metadata = extract_usercomment_metadata(original_comment)
+    photo_record["downloaded"] = True
+    photo_record["file"] = result.staged_filename
 
-    logger.debug(
-        "UserComment extraction complete: "
-        "event=%s, year=%s, location=%s, info=%s",
-        exif_metadata.exif_event is not None,
-        exif_metadata.exif_year is not None,
-        exif_metadata.exif_location is not None,
-        exif_metadata.exif_info is not None,
-    )
-    logger.debug(
-        "Original UserComment available for metadata extraction: %s",
-        original_comment is not None,
-    )
+    if source_directory is None:
+        raise ValueError(
+            "Source directory is required for metadata processing."
+        )
 
-    logger.info(
-        "Directory ancestry check to be implemented: "
-        "source_path=%s, event=%s, classifications=%s",
-        source_path,
-        event_name,
-        directory_classifications,
-    )
-
-    logger.info(
-        "Metadata to be determined: source_path=%s, staged_filename=%s, "
-        "event=%s",
-        source_path,
-        staged_filename,
-        event_name,
-    )
-
-    logger.info(
-        "Building successful photo record with available values: "
-        "guid=%s, downloaded=True, file=%s, event=%s; "
-        "metadata fields will retain their defined defaults.",
-        source_path.resolve(),
-        staged_filename,
-        event_name,
-    )
-
-    return build_photo_record(
+    # Step 1: Gather context and extract UserComment metadata.
+    context = gather_photo_metadata_context(
         source_path=source_path,
-        downloaded=True,
-        file=staged_filename,
-        event=event_name,
+        staged_path=photos_directory / result.staged_filename,
+        source_directory=source_directory,
+        directory_classifications=dict(directory_classifications or {}),
+        workspace_event=event_name,
+    )
+
+    extract_usercomment_metadata(
+        context.user_comment,
+        photo_record,
+    )
+
+    logger.info(
+        "UserComment processing complete: event=%s, year=%s, "
+        "location=%s, info=%s",
+        bool(photo_record["event"]),
+        bool(photo_record["year"]),
+        bool(photo_record["location"]),
+        bool(photo_record["info"]),
+    )
+
+    # Step 2: Populate GPS and propagation fields.
+    # GPS coordinates take precedence when calculating location_key.
+    # geo_location is deliberately not populated at this stage.
+    populate_gps_fields(photo_record, context)
+
+    # Every photo belongs to its containing directory.
+    photo_record["moment_id"] = source_path.parent.name
+
+    # Step 3: Resolve any metadata fields not supplied by UserComment.
+    if not photo_record["event"]:
+        resolve_event(photo_record, context)
+
+    if not photo_record["year"]:
+        resolve_year(photo_record, context)
+
+    if not photo_record["location"]:
+        resolve_location(photo_record, context)
+
+    if not photo_record["info"]:
+        resolve_info(photo_record, context)
+
+    logger.info(
+        "Photo metadata processing complete: guid=%s, event=%s, "
+        "year=%s, location=%s, info_present=%s, lat=%s, lng=%s, "
+        "location_key=%s, moment_id=%s",
+        photo_record["guid"],
+        photo_record["event"],
+        photo_record["year"],
+        photo_record["location"],
+        bool(photo_record["info"]),
+        photo_record["lat"],
+        photo_record["lng"],
+        photo_record["location_key"],
+        photo_record["moment_id"],
+    )
+
+    return photo_record
+
+def _gps_dms_to_decimal(
+    coordinate: Any,
+    reference: str | None,
+    maximum: float,
+    coordinate_name: str,
+) -> float | None:
+    """Convert an EXIF GPS DMS coordinate to decimal degrees."""
+
+    import math
+
+    def rational_to_float(value: Any) -> float | None:
+        if (
+            isinstance(value, (tuple, list))
+            and len(value) == 2
+        ):
+            numerator, denominator = value
+
+            if (
+                isinstance(numerator, bool)
+                or isinstance(denominator, bool)
+                or not isinstance(numerator, (int, float))
+                or not isinstance(denominator, (int, float))
+                or denominator == 0
+            ):
+                return None
+
+            result = numerator / denominator
+
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            result = float(value)
+
+        else:
+            return None
+
+        return result if math.isfinite(result) else None
+
+    # GPS data is optional. Missing coordinates and references
+    # are normal for photos that have no GPS metadata.
+    if coordinate is None and reference is None:
+        return None
+
+    if reference not in ("N", "S", "E", "W"):
+        logger.warning(
+            "Invalid GPS %s reference: %r.",
+            coordinate_name,
+            reference,
+        )
+        return None
+
+    if not isinstance(coordinate, (tuple, list)) or len(coordinate) != 3:
+        logger.warning(
+            "Invalid GPS %s coordinate: %r.",
+            coordinate_name,
+            coordinate,
+        )
+        return None
+
+    degrees, minutes, seconds = (
+        rational_to_float(value) for value in coordinate
+    )
+
+    if degrees is None or minutes is None or seconds is None:
+        logger.warning(
+            "Invalid GPS %s DMS values: %r.",
+            coordinate_name,
+            coordinate,
+        )
+        return None
+
+    if (
+        degrees < 0
+        or degrees > maximum
+        or not 0 <= minutes < 60
+        or not 0 <= seconds < 60
+        or (degrees == maximum and (minutes != 0 or seconds != 0))
+    ):
+        logger.warning(
+            "GPS %s coordinate is outside its valid range: %r.",
+            coordinate_name,
+            coordinate,
+        )
+        return None
+
+    decimal = degrees + minutes / 60 + seconds / 3600
+
+    if reference in ("S", "W"):
+        decimal = -decimal
+
+    return decimal
+
+
+def populate_gps_fields(
+    photo_record: dict[str, Any],
+    context: PhotoMetadataContext,
+) -> None:
+    """Populate latitude, longitude and location_key from GPS data.
+
+    GPS coordinates take precedence over inherited Location folders
+    when calculating location_key.
+
+    geo_location is not populated here; reverse geocoding belongs
+    to Location resolution.
+    """
+    latitude = _gps_dms_to_decimal(
+        context.gps_latitude,
+        context.gps_latitude_ref,
+        90,
+        "latitude",
+    )
+
+    longitude = _gps_dms_to_decimal(
+        context.gps_longitude,
+        context.gps_longitude_ref,
+        180,
+        "longitude",
+    )
+
+    if latitude is not None and longitude is not None:
+        photo_record["lat"] = latitude
+        photo_record["lng"] = longitude
+        photo_record["location_key"] = (
+            f"{latitude:.2f},{longitude:.2f}"
+        )
+
+        logger.info(
+            "GPS coordinates populated: source=%s, "
+            "latitude=%s, longitude=%s, location_key=%s.",
+            context.source_path,
+            latitude,
+            longitude,
+            photo_record["location_key"],
+        )
+        return
+
+    # Without a complete valid GPS position, use the nearest
+    # directory classified as Location for the propagation key.
+    if context.location_ancestor_folder:
+        photo_record["location_key"] = context.location_ancestor_folder
+
+        logger.info(
+            "Location key inherited from directory: source=%s, "
+            "folder=%s.",
+            context.source_path,
+            context.location_ancestor_folder,
+        )
+    else:
+        logger.debug(
+            "No GPS coordinates or inherited Location key: source=%s.",
+            context.source_path,
+        )
+
+
+def resolve_event(
+    photo_record: dict[str, Any],
+    context: PhotoMetadataContext,
+) -> None:
+    """Resolve Event from directory inheritance or workspace context."""
+
+    # Preserve an Event already extracted from UserComment.
+    if photo_record.get("event"):
+        return
+
+    if context.event_ancestor:
+        photo_record["event"] = context.event_ancestor
+        logger.info(
+            "Event inherited from directory: source=%s, event=%s.",
+            context.source_path,
+            photo_record["event"],
+        )
+        return
+
+    if context.workspace_event:
+        photo_record["event"] = context.workspace_event
+        logger.info(
+            "Event inherited from workspace: source=%s, event=%s.",
+            context.source_path,
+            photo_record["event"],
+        )
+        return
+
+    logger.debug(
+        "No Event value available: source=%s.",
+        context.source_path,
     )
 
 
+def resolve_year(
+    photo_record: dict[str, Any],
+    context: PhotoMetadataContext,
+) -> None:
+    """Propose Year from EXIF date, filesystem timestamp or inheritance."""
+
+    # Preserve a Year already extracted from UserComment.
+    if photo_record.get("year"):
+        return
+
+    # Priority 1: EXIF DateTimeOriginal.
+    date_text = context.date_time_original
+
+    if date_text:
+        # Require the exact standard EXIF date/time format.
+        if re.fullmatch(r"[0-9]{4}:[0-9]{2}:[0-9]{2} "
+                        r"[0-9]{2}:[0-9]{2}:[0-9]{2}", date_text):
+            try:
+                original_date = datetime.strptime(
+                    date_text,
+                    "%Y:%m:%d %H:%M:%S",
+                )
+            except ValueError:
+                logger.debug(
+                    "Invalid EXIF DateTimeOriginal: source=%s, value=%r.",
+                    context.source_path,
+                    date_text,
+                )
+            else:
+                photo_record["year"] = str(original_date.year)
+                logger.info(
+                    "Year resolved from EXIF DateTimeOriginal: "
+                    "source=%s, year=%s.",
+                    context.source_path,
+                    photo_record["year"],
+                )
+                return
+        else:
+            logger.debug(
+                "EXIF DateTimeOriginal has unsupported format: "
+                "source=%s, value=%r.",
+                context.source_path,
+                date_text,
+            )
+
+    # Priority 2: Filesystem timestamp.
+    if context.filesystem_timestamp is not None:
+        photo_record["year"] = str(
+            context.filesystem_timestamp.year
+        )
+        logger.info(
+            "Year resolved from filesystem timestamp: "
+            "source=%s, year=%s.",
+            context.source_path,
+            photo_record["year"],
+        )
+        return
+
+    # Priority 3: Inherited Year directory.
+    if context.year_ancestor:
+        photo_record["year"] = context.year_ancestor
+        logger.info(
+            "Year inherited from directory: source=%s, "
+            "folder=%s, year=%s.",
+            context.source_path,
+            context.year_ancestor_folder,
+            photo_record["year"],
+        )
+        return
+
+    # No usable source was available.
+    logger.debug(
+        "No Year value available: source=%s.",
+        context.source_path,
+    )
+
+
+def resolve_location(
+    photo_record: dict[str, Any],
+    context: PhotoMetadataContext,
+) -> None:
+    """Propose Location from GPS geocoding or directory inheritance."""
+    logger.debug(
+        "Location resolution pending: source=%s",
+        context.source_path,
+    )
+
+
+def resolve_info(
+    photo_record: dict[str, Any],
+    context: PhotoMetadataContext,
+) -> None:
+    """Propose Info from directory inheritance or filename."""
+
+    # Preserve Info already extracted from UserComment.
+    if photo_record.get("info"):
+        return
+
+    # Priority 1: Inherited Info directory.
+    if context.info_ancestor:
+        photo_record["info"] = context.info_ancestor
+        logger.info(
+            "Info inherited from directory: source=%s, info=%s.",
+            context.source_path,
+            photo_record["info"],
+        )
+        return
+
+    # Priority 2: Filename.
+    filename = context.source_path.stem
+
+    # Normalise separators and whitespace.
+    proposed_info = re.sub(r"[_-]+", " ", filename)
+    proposed_info = " ".join(proposed_info.split())
+
+    # Reject empty or numeric-only names.
+    if not proposed_info or re.fullmatch(r"[0-9 ]+", proposed_info):
+        logger.debug(
+            "Filename rejected as Info (numeric or empty): source=%s.",
+            context.source_path,
+        )
+        return
+
+    # Reject recognisable camera-generated filenames.
+    if re.fullmatch(
+        r"(?:IMG|DSC|DSCF|DSCN|PXL|VID|MOV)\s*\d+(?:\s+\d+)*",
+        proposed_info,
+        re.IGNORECASE,
+    ):
+        logger.debug(
+            "Filename rejected as Info (camera-generated): source=%s.",
+            context.source_path,
+        )
+        return
+
+    # Reject UUID-like and long hexadecimal identifiers.
+    if re.fullmatch(
+        r"[0-9a-f]{8}(?:\s+[0-9a-f]{4}){3}\s+[0-9a-f]{12}",
+        proposed_info,
+        re.IGNORECASE,
+    ) or re.fullmatch(r"[0-9a-f]{16,}", proposed_info, re.IGNORECASE):
+        logger.debug(
+            "Filename rejected as Info (identifier): source=%s.",
+            context.source_path,
+        )
+        return
+
+    # Accept the normalised filename.
+    photo_record["info"] = proposed_info
+    logger.info(
+        "Info proposed from filename: source=%s, info=%s.",
+        context.source_path,
+        photo_record["info"],
+    )
 
 
 def update_progress_display(progress: ImportProgress) -> None:
@@ -284,6 +653,7 @@ def run_import_loop(
     candidate_paths: list[Path],
     photos_directory: Path,
     checkpoint_path: Path,
+    source_directory: Path | None = None,
     progress_callback: Callable[[ImportProgress], None] | None = None,
 ) -> ImportProgress:
     """Process candidates, record each outcome, and save recovery progress."""
@@ -342,6 +712,7 @@ def run_import_loop(
             photos_directory=photos_directory,
             event_name=event_name,
             directory_classifications=directory_classifications,
+            source_directory=source_directory,
         )
 
         checkpoint["photos"].append(record)

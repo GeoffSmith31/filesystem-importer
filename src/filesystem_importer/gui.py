@@ -53,12 +53,14 @@ class ImportWorker(QObject):
         candidate_paths,
         photos_directory,
         checkpoint_path,
+        source_directory,
     ):
         super().__init__()
         self.checkpoint = checkpoint
         self.candidate_paths = candidate_paths
         self.photos_directory = photos_directory
         self.checkpoint_path = checkpoint_path
+        self.source_directory = source_directory
 
     @Slot()
     def run(self):
@@ -69,6 +71,7 @@ class ImportWorker(QObject):
                 candidate_paths=self.candidate_paths,
                 photos_directory=self.photos_directory,
                 checkpoint_path=self.checkpoint_path,
+                source_directory=self.source_directory,
                 progress_callback=self.progress_updated.emit,
             )
         except Exception as exc:
@@ -495,6 +498,7 @@ class FilesystemImporterWindow(QMainWindow):
             candidate_paths=list(self.scan_result.candidate_files),
             photos_directory=self.staging_directory / "photos",
             checkpoint_path=self.checkpoint_path,
+            source_directory=self.scan_result.source_directory,
         )
         self.import_worker.moveToThread(self.import_thread)
 

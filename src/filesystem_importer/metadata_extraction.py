@@ -1,40 +1,37 @@
 
-"""Extract probable metadata fields from an EXIF UserComment."""
+"""Extract probable metadata fields from a decoded EXIF UserComment."""
 
+import logging
 import re
-from dataclasses import dataclass
-from piexif import helper
+from typing import Any
+
 from filesystem_importer.geocoding import location_validate
 from filesystem_importer.metadata_validation import year_validate
 
-@dataclass(frozen=True)
-class ExifMetadata:
-    """Probable metadata values extracted from UserComment."""
 
-    exif_event: str | None = None
-    exif_year: str | None = None
-    exif_location: str | None = None
-    exif_info: str | None = None
+logger = logging.getLogger(__name__)
 
 
 def extract_usercomment_metadata(
-    original_comment: bytes | None,
-) -> ExifMetadata:
-    """Extract and validate probable metadata fields from an EXIF UserComment.
+    user_comment: str | None,
+    photo_record: dict[str, Any],
+) -> None:
+    """Extract and validate UserComment fields into the photo record.
 
-    If the comment splits into exactly four fields, assign them in order:
+    A confidently extracted four-field comment is interpreted as:
     Event, Year, Location and Info.
 
-    Accept the extracted fields only when Year and Location validation
-    both succeed. Otherwise, preserve the entire original comment as Info.
+    Pipe delimiters take precedence. If no pipe is present, colons
+    and hyphens are used as delimiters.
 
-    Comments that do not split into exactly four fields are also preserved
-    in their entirety as Info.
+    If the comment cannot be confidently extracted, preserve the
+    entire comment in the Info field.
     """
-    if original_comment is None:
-        return ExifMetadata()
+    if user_comment is None or not user_comment.strip():
+        logger.debug("No usable UserComment found.")
+        return
 
-    comment = helper.UserComment.load(original_comment)
+    comment = user_comment
 
     if "|" in comment:
         fields = comment.split("|")
@@ -42,7 +39,14 @@ def extract_usercomment_metadata(
         fields = re.split(r"[:-]", comment)
 
     if len(fields) != 4:
-        return ExifMetadata(exif_info=comment)
+        photo_record["info"] = comment
+
+        logger.info(
+            "UserComment retained in Info: expected four fields, "
+            "found %d.",
+            len(fields),
+        )
+        return
 
     event = fields[0].strip()
     year = fields[1].strip()
@@ -53,12 +57,25 @@ def extract_usercomment_metadata(
     validated_location = location_validate(location)
 
     if validated_year is None or validated_location is not True:
-        return ExifMetadata(exif_info=comment)
+        photo_record["info"] = comment
 
-    return ExifMetadata(
-        exif_event=event,
-        exif_year=validated_year,
-        exif_location=location,
-        exif_info=info,
+        logger.info(
+            "UserComment validation failed; entire comment "
+            "retained in Info."
+        )
+        return
+
+    photo_record["event"] = event
+    photo_record["year"] = validated_year
+    photo_record["location"] = location
+    photo_record["info"] = info
+
+    logger.info(
+        "UserComment metadata extracted: event=%s, year=%s, "
+        "location=%s, info_present=%s.",
+        event,
+        validated_year,
+        location,
+        bool(info),
     )
 

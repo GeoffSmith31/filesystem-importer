@@ -75,7 +75,12 @@ def test_process_candidate_builds_record_on_success(tmp_path):
     )
     extracted_metadata = []
 
-    def capture_extraction(comment):
+    def capture_extraction(comment, photo_record):
+        extracted_metadata.append(comment)
+        photo_record["event"] = "Test Event"
+        photo_record["year"] = "2024"
+        photo_record["location"] = "Paris"
+        photo_record["info"] = "Family trip"
         result = extract_usercomment_metadata(comment)
         extracted_metadata.append(result)
         return result
@@ -109,6 +114,7 @@ def test_process_candidate_builds_record_on_success(tmp_path):
             photos,
             "Test Event",
             {"1": "Event", "2": "Location"},
+            source_directory=tmp_path,
         )
 
     extract_mock.assert_called_once_with(original_comment)
@@ -339,6 +345,7 @@ def test_run_import_loop_rejects_invalid_checkpoint(tmp_path):
             candidate_paths=[],
             photos_directory=Path("/staging/photos"),
             checkpoint_path=tmp_path / "importing.json",
+            source_directory=None,
         )
 def test_run_import_loop_records_failed_candidate_and_saves_checkpoint(
     tmp_path,
@@ -378,6 +385,7 @@ def test_run_import_loop_records_failed_candidate_and_saves_checkpoint(
             candidate_paths=[candidate],
             photos_directory=photos_directory,
             checkpoint_path=tmp_path / "importing.json",
+            source_directory=None,
         )
 
     assert checkpoint["photos"] == [failed_record]
