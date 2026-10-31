@@ -237,3 +237,17 @@ def test_injected_cache_is_used(
     assert cache.entries["Toowoomba"] is True
     assert cache.stored == [("Toowoomba", True)]
 
+@pytest.mark.parametrize("result", [True, False, None])
+def test_location_validate_preserves_check_location_result(
+    monkeypatch, result
+):
+    def fake_check_location(location_name):
+        assert location_name == "Brisbane"
+        return result
+
+    monkeypatch.setattr(
+        geocoding, "check_location", fake_check_location
+    )
+
+    assert geocoding.location_validate("Brisbane") is result
+

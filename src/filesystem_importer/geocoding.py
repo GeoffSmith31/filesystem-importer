@@ -183,3 +183,12 @@ def check_location(
     location_cache.store(name, valid=result)
     return result
 
+def location_validate(location_name: str) -> bool | None:
+    """Validate a location name using the configured geocoding service.
+
+    Returns:
+        True: the location was recognised.
+        False: the location was not recognised.
+        None: the location could not be verified.
+    """
+    return check_location(location_name)
