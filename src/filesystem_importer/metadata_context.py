@@ -16,11 +16,12 @@
 import calendar
 import piexif
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, date
 from pathlib import Path
 from typing import Any
 from piexif import helper
+
 from filesystem_importer.app_logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,7 +29,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class PhotoMetadataContext:
-    """Source information and derived-value containers for one photo."""
+    """Source information required for one photo's metadata resolution."""
 
     # Original and staged files.
     source_path: Path
@@ -39,7 +40,7 @@ class PhotoMetadataContext:
     source_directory: Path
     relative_directory: Path
 
-    # Saved configuration used when resolving inherited values.
+    # Directory classifications and workspace configuration.
     directory_classifications: dict[str, str]
     workspace_event: str
 
@@ -51,29 +52,6 @@ class PhotoMetadataContext:
     gps_latitude_ref: str | None = None
     gps_longitude: Any = None
     gps_longitude_ref: str | None = None
-
-    # Inherited values and the original directory names they came from.
-    event_ancestor: str | None = None
-    event_ancestor_folder: str | None = None
-
-    year_ancestor: str | None = None
-    year_ancestor_folder: str | None = None
-
-    location_ancestor: str | None = None
-    location_ancestor_folder: str | None = None
-
-    info_ancestor: str | None = None
-    info_ancestor_folder: str | None = None
-
-    event_comment: str | None = None
-    year_comment: str | None = None
-    location_comment: str | None = None
-    info_comment: str | None = None
-
-    geo_location: str | None = None
-
-    # Parsed components are populated by the later UserComment parser.
-    comment_components: list[str] | None = None
 
 
 def _decode_user_comment(raw_comment: bytes | None) -> str | None:
@@ -93,15 +71,31 @@ def _decode_user_comment(raw_comment: bytes | None) -> str | None:
     return comment
 
 
-def _read_exif_values(
-    staged_path: Path,
-) -> dict[str, Any]:
+def _decode_gps_ref(value: Any) -> str | None:
+    """Convert an EXIF GPS reference to a string when possible."""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+
+    if isinstance(value, str):
+        value = value.strip("\x00 ").upper()
+        return value or None
+
+    return None
+
+
+def _read_exif_values(staged_path: Path) -> dict[str, Any]:
     """Read the required raw EXIF values without modifying the photo."""
     try:
         exif = piexif.load(str(staged_path))
     except (OSError, ValueError, piexif.InvalidImageDataError) as exc:
-        logger.warning("Could not read EXIF metadata from %s: %s",
-                       staged_path, exc)
+        logger.warning(
+            "Could not read EXIF metadata from %s: %s",
+            staged_path,
+            exc,
+        )
         return {}
 
     exif_ifd = exif.get("Exif", {})
@@ -111,6 +105,7 @@ def _read_exif_values(
     raw_date = exif_ifd.get(piexif.ExifIFD.DateTimeOriginal)
 
     date_time_original = None
+
     if isinstance(raw_date, bytes):
         try:
             date_time_original = raw_date.decode("ascii").strip("\x00 ")
@@ -134,21 +129,6 @@ def _read_exif_values(
         "gps_longitude": gps_ifd.get(piexif.GPSIFD.GPSLongitude),
         "gps_longitude_ref": _decode_gps_ref(raw_longitude_ref),
     }
-
-
-def _decode_gps_ref(value: Any) -> str | None:
-    """Convert an EXIF GPS reference to a string when possible."""
-    if isinstance(value, bytes):
-        try:
-            value = value.decode("ascii")
-        except UnicodeDecodeError:
-            return None
-
-    if isinstance(value, str):
-        value = value.strip("\x00 ").upper()
-        return value or None
-
-    return None
 
 
 def gather_photo_metadata_context(
@@ -199,53 +179,6 @@ def gather_photo_metadata_context(
 
     exif_values = _read_exif_values(staged_path)
 
-
-    # Resolve directory inheritance independently for each category.
-    event_inheritance = _find_directory_ancestor(
-        relative_directory,
-        source_directory,
-        directory_classifications,
-        "Event",
-    )
-    event_ancestor, event_ancestor_folder = (
-        event_inheritance if event_inheritance is not None
-        else (None, None)
-    )
-
-    year_inheritance = _find_directory_ancestor(
-        relative_directory,
-        source_directory,
-        directory_classifications,
-        "Year",
-    )
-    year_ancestor, year_ancestor_folder = (
-        year_inheritance if year_inheritance is not None
-        else (None, None)
-    )
-
-    location_inheritance = _find_directory_ancestor(
-        relative_directory,
-        source_directory,
-        directory_classifications,
-        "Location",
-    )
-    location_ancestor, location_ancestor_folder = (
-        location_inheritance if location_inheritance is not None
-        else (None, None)
-    )
-
-    info_inheritance = _find_directory_ancestor(
-        relative_directory,
-        source_directory,
-        directory_classifications,
-        "Info",
-    )
-    info_ancestor, info_ancestor_folder = (
-        info_inheritance if info_inheritance is not None
-        else (None, None)
-    )
-
-
     logger.debug(
         "Gathered metadata inputs for source=%s staged=%s",
         source_path,
@@ -260,14 +193,6 @@ def gather_photo_metadata_context(
         relative_directory=relative_directory,
         directory_classifications=dict(directory_classifications),
         workspace_event=workspace_event,
-        event_ancestor=event_ancestor,
-        event_ancestor_folder=event_ancestor_folder,
-        year_ancestor=year_ancestor,
-        year_ancestor_folder=year_ancestor_folder,
-        location_ancestor=location_ancestor,
-        location_ancestor_folder=location_ancestor_folder,
-        info_ancestor=info_ancestor,
-        info_ancestor_folder=info_ancestor_folder,
         **exif_values,
     )
 
@@ -335,8 +260,6 @@ def _normalise_inherited_year(folder_name: str) -> str | None:
             return None
 
         try:
-            from datetime import date
-
             parsed_date = date(
                 int(year_text),
                 month,
@@ -532,4 +455,72 @@ def _find_directory_ancestor(
         relative_directory,
     )
     return None
+
+
+def _find_directory_ancestors(
+    relative_directory: Path,
+    source_directory: Path,
+    directory_classifications: dict[str, str],
+    category: str,
+) -> list[tuple[str, str]]:
+    """Find all non-empty classified directory ancestors.
+
+    Return a list of (value, original_folder_name) pairs, ordered
+    nearest to farthest.
+
+    Unlike _find_directory_ancestor(), this function does not validate
+    or normalise the folder names. The caller is responsible for
+    deciding whether each candidate is usable.
+    """
+    current_directory = relative_directory
+    ancestors: list[tuple[str, str]] = []
+
+    logger.debug(
+        "Searching for all %s ancestors from relative directory %s.",
+        category,
+        relative_directory,
+    )
+
+    while True:
+        level = len(current_directory.parts) + 1
+        classification = directory_classifications.get(str(level))
+
+        logger.debug(
+            "Checking directory %s at level %d: classification=%r, "
+            "requested category=%r.",
+            current_directory,
+            level,
+            classification,
+            category,
+        )
+
+        if classification == category:
+            if current_directory == Path("."):
+                folder_name = source_directory.name
+            else:
+                folder_name = current_directory.name
+
+            if folder_name.strip():
+                ancestors.append((folder_name, folder_name))
+
+                logger.debug(
+                    "Added %s ancestor candidate at level %d: %r.",
+                    category,
+                    level,
+                    folder_name,
+                )
+
+        if current_directory == Path("."):
+            break
+
+        current_directory = current_directory.parent
+
+    logger.info(
+        "Found %d %s ancestor candidate(s) from %s.",
+        len(ancestors),
+        category,
+        relative_directory,
+    )
+
+    return ancestors
 

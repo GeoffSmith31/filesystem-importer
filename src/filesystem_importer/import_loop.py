@@ -31,6 +31,12 @@ from filesystem_importer.checkpoint_writer import (
 from filesystem_importer.metadata_context import (
     PhotoMetadataContext,
     gather_photo_metadata_context,
+    _find_directory_ancestor,
+    _find_directory_ancestors,
+)
+from filesystem_importer.geocoding import (
+    check_location,
+    reverse_geocode,
 )
 from filesystem_importer.metadata_extraction import (
     extract_usercomment_metadata,
@@ -179,6 +185,7 @@ def process_candidate(
     event_name: str,
     directory_classifications: Mapping[str, str] | None = None,
     source_directory: Path | None = None,
+    existing_photo_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Stage one candidate and populate its proposed metadata."""
 
@@ -250,7 +257,11 @@ def process_candidate(
         resolve_year(photo_record, context)
 
     if not photo_record["location"]:
-        resolve_location(photo_record, context)
+        resolve_location(
+            photo_record,
+            context,
+            existing_photo_records=existing_photo_records,
+        )
 
     if not photo_record["info"]:
         resolve_info(photo_record, context)
@@ -367,13 +378,10 @@ def populate_gps_fields(
     photo_record: dict[str, Any],
     context: PhotoMetadataContext,
 ) -> None:
-    """Populate latitude, longitude and location_key from GPS data.
+    """Populate latitude, longitude and GPS-derived location_key.
 
-    GPS coordinates take precedence over inherited Location folders
-    when calculating location_key.
-
-    geo_location is not populated here; reverse geocoding belongs
-    to Location resolution.
+    geo_location is populated later by reverse geocoding during
+    Location resolution.
     """
     latitude = _gps_dms_to_decimal(
         context.gps_latitude,
@@ -389,39 +397,25 @@ def populate_gps_fields(
         "longitude",
     )
 
-    if latitude is not None and longitude is not None:
-        photo_record["lat"] = latitude
-        photo_record["lng"] = longitude
-        photo_record["location_key"] = (
-            f"{latitude:.2f},{longitude:.2f}"
-        )
-
-        logger.info(
-            "GPS coordinates populated: source=%s, "
-            "latitude=%s, longitude=%s, location_key=%s.",
+    if latitude is None or longitude is None:
+        logger.debug(
+            "No complete valid GPS position: source=%s.",
             context.source_path,
-            latitude,
-            longitude,
-            photo_record["location_key"],
         )
         return
 
-    # Without a complete valid GPS position, use the nearest
-    # directory classified as Location for the propagation key.
-    if context.location_ancestor_folder:
-        photo_record["location_key"] = context.location_ancestor_folder
+    photo_record["lat"] = latitude
+    photo_record["lng"] = longitude
+    photo_record["location_key"] = f"{latitude:.2f},{longitude:.2f}"
 
-        logger.info(
-            "Location key inherited from directory: source=%s, "
-            "folder=%s.",
-            context.source_path,
-            context.location_ancestor_folder,
-        )
-    else:
-        logger.debug(
-            "No GPS coordinates or inherited Location key: source=%s.",
-            context.source_path,
-        )
+    logger.info(
+        "GPS coordinates populated: source=%s, "
+        "latitude=%s, longitude=%s, location_key=%s.",
+        context.source_path,
+        latitude,
+        longitude,
+        photo_record["location_key"],
+    )
 
 
 def resolve_event(
@@ -430,16 +424,23 @@ def resolve_event(
 ) -> None:
     """Resolve Event from directory inheritance or workspace context."""
 
-    # Preserve an Event already extracted from UserComment.
-    if photo_record.get("event"):
-        return
+    inheritance = _find_directory_ancestor(
+        context.relative_directory,
+        context.source_directory,
+        context.directory_classifications,
+        "Event",
+    )
 
-    if context.event_ancestor:
-        photo_record["event"] = context.event_ancestor
+    if inheritance is not None:
+        event, folder_name = inheritance
+        photo_record["event"] = event
+
         logger.info(
-            "Event inherited from directory: source=%s, event=%s.",
+            "Event inherited from directory: source=%s, "
+            "folder=%s, event=%s.",
             context.source_path,
-            photo_record["event"],
+            folder_name,
+            event,
         )
         return
 
@@ -452,10 +453,7 @@ def resolve_event(
         )
         return
 
-    logger.debug(
-        "No Event value available: source=%s.",
-        context.source_path,
-    )
+    logger.debug("No Event value available: source=%s.", context.source_path)
 
 
 def resolve_year(
@@ -517,14 +515,23 @@ def resolve_year(
         return
 
     # Priority 3: Inherited Year directory.
-    if context.year_ancestor:
-        photo_record["year"] = context.year_ancestor
+    inheritance = _find_directory_ancestor(
+        context.relative_directory,
+        context.source_directory,
+        context.directory_classifications,
+        "Year",
+    )
+
+    if inheritance is not None:
+        year, folder_name = inheritance
+        photo_record["year"] = year
+
         logger.info(
             "Year inherited from directory: source=%s, "
             "folder=%s, year=%s.",
             context.source_path,
-            context.year_ancestor_folder,
-            photo_record["year"],
+            folder_name,
+            year,
         )
         return
 
@@ -538,10 +545,105 @@ def resolve_year(
 def resolve_location(
     photo_record: dict[str, Any],
     context: PhotoMetadataContext,
+    existing_photo_records: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Propose Location from GPS geocoding or directory inheritance."""
+    """Resolve Location from GPS reverse geocoding or directory inheritance."""
+
+    # GPS coordinates take priority over directory inheritance.
+    if photo_record["lat"] is not None and photo_record["lng"] is not None:
+        location_key = photo_record["location_key"]
+
+        # Reuse a previously resolved location for the same GPS key.
+        for existing_record in existing_photo_records or []:
+            if (
+                existing_record.get("location_key") == location_key
+                and existing_record.get("geo_location")
+            ):
+                resolved_location = existing_record["geo_location"]
+                photo_record["location"] = resolved_location
+                photo_record["geo_location"] = resolved_location
+
+                logger.info(
+                    "Location reused from previous photo: source=%s, "
+                    "location_key=%s, location=%s.",
+                    context.source_path,
+                    location_key,
+                    resolved_location,
+                )
+                return
+
+        # No previous result: ask Nominatim to resolve the coordinates.
+        resolved_location = reverse_geocode(
+            photo_record["lat"],
+            photo_record["lng"],
+        )
+
+        if resolved_location:
+            photo_record["location"] = resolved_location
+            photo_record["geo_location"] = resolved_location
+
+            logger.info(
+                "Location resolved from GPS: source=%s, "
+                "location=%s, location_key=%s.",
+                context.source_path,
+                resolved_location,
+                location_key,
+            )
+            return
+
+        logger.info(
+            "GPS reverse geocoding did not resolve a location; "
+            "trying directory inheritance: source=%s.",
+            context.source_path,
+        )
+
+    # No GPS, or GPS reverse geocoding did not produce a result.
+    # Try Location-classified folders, nearest first.
+    ancestors = _find_directory_ancestors(
+        context.relative_directory,
+        context.source_directory,
+        context.directory_classifications,
+        "Location",
+    )
+
+    for folder_name, _ in ancestors:
+        result = check_location(folder_name)
+
+        if result is None:
+            logger.warning(
+                "Location validation unavailable; stopping directory "
+                "search: source=%s, folder=%s.",
+                context.source_path,
+                folder_name,
+            )
+            return
+
+        if result:
+            photo_record["location"] = folder_name
+
+            # Only set location_key from the folder when GPS did not
+            # already provide a coordinate-based key.
+            if photo_record["location_key"] is None:
+                photo_record["location_key"] = folder_name
+
+            logger.info(
+                "Location inherited from validated directory: "
+                "source=%s, folder=%s, location_key=%s.",
+                context.source_path,
+                folder_name,
+                photo_record["location_key"],
+            )
+            return
+
+        logger.info(
+            "Location folder was not recognised; trying next ancestor: "
+            "source=%s, folder=%s.",
+            context.source_path,
+            folder_name,
+        )
+
     logger.debug(
-        "Location resolution pending: source=%s",
+        "No usable Location value found: source=%s.",
         context.source_path,
     )
 
@@ -552,17 +654,23 @@ def resolve_info(
 ) -> None:
     """Propose Info from directory inheritance or filename."""
 
-    # Preserve Info already extracted from UserComment.
-    if photo_record.get("info"):
-        return
+    inheritance = _find_directory_ancestor(
+        context.relative_directory,
+        context.source_directory,
+        context.directory_classifications,
+        "Info",
+    )
 
-    # Priority 1: Inherited Info directory.
-    if context.info_ancestor:
-        photo_record["info"] = context.info_ancestor
+    if inheritance is not None:
+        info, folder_name = inheritance
+        photo_record["info"] = info
+
         logger.info(
-            "Info inherited from directory: source=%s, info=%s.",
+            "Info inherited from directory: source=%s, "
+            "folder=%s, info=%s.",
             context.source_path,
-            photo_record["info"],
+            folder_name,
+            info,
         )
         return
 
@@ -605,8 +713,8 @@ def resolve_info(
         )
         return
 
-    # Accept the normalised filename.
     photo_record["info"] = proposed_info
+
     logger.info(
         "Info proposed from filename: source=%s, info=%s.",
         context.source_path,
@@ -713,6 +821,7 @@ def run_import_loop(
             event_name=event_name,
             directory_classifications=directory_classifications,
             source_directory=source_directory,
+            existing_photo_records=checkpoint["photos"],
         )
 
         checkpoint["photos"].append(record)

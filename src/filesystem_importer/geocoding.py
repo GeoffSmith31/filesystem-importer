@@ -14,6 +14,7 @@ from filesystem_importer.location_cache import LocationCache
 logger = get_logger(__name__)
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 REQUEST_TIMEOUT_SECONDS = 10
 
 # Nominatim requires an identifiable User-Agent.
@@ -182,6 +183,149 @@ def check_location(
 
     location_cache.store(name, valid=result)
     return result
+    
+def reverse_geocode(
+    latitude: float,
+    longitude: float,
+    *,
+    rate_limiter=geocoding_rate_limiter,
+    timeout: float = REQUEST_TIMEOUT_SECONDS,
+) -> str | None:
+    """Resolve GPS coordinates to the most specific available place name.
+
+    Returns:
+        A location name, or None if the location could not be resolved.
+    """
+
+    if _settings is None:
+        logger.warning("Geocoding settings have not been configured.")
+        return None
+
+    user_agent = _settings.user_agent
+    if not user_agent:
+        logger.warning("No geocoding User-Agent is available.")
+        return None
+
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid GPS coordinates: latitude=%r, longitude=%r.",
+            latitude,
+            longitude,
+        )
+        return None
+
+    if (
+        not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        logger.warning(
+            "GPS coordinates out of range: latitude=%s, longitude=%s.",
+            latitude,
+            longitude,
+        )
+        return None
+
+    parameters = urlencode(
+        {
+            "lat": latitude,
+            "lon": longitude,
+            "format": "jsonv2",
+            "addressdetails": 1,
+        }
+    )
+
+    url = f"{NOMINATIM_REVERSE_URL}?{parameters}"
+
+    request = Request(
+        url,
+        headers={
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+
+    logger.debug(
+        "Sending Nominatim reverse query for latitude=%s, longitude=%s.",
+        latitude,
+        longitude,
+    )
+
+    # Reserve a request slot immediately before making the HTTP request.
+    rate_limiter.wait_for_slot()
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+
+        result = json.loads(payload.decode("utf-8"))
+
+    except HTTPError as exc:
+        logger.warning(
+            "Nominatim reverse HTTP error: HTTP %s.",
+            exc.code,
+        )
+        return None
+
+    except (URLError, TimeoutError, OSError) as exc:
+        logger.warning(
+            "Nominatim reverse request failed: %s.",
+            exc,
+        )
+        return None
+
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Could not decode Nominatim reverse response: %s.",
+            exc,
+        )
+        return None
+
+    if not isinstance(result, dict):
+        logger.warning("Nominatim returned an unexpected reverse response.")
+        return None
+
+    address = result.get("address")
+
+    if not isinstance(address, dict):
+        logger.info(
+            "Nominatim returned no address for latitude=%s, longitude=%s.",
+            latitude,
+            longitude,
+        )
+        return None
+
+    # Select the most specific available place name.
+    for address_type in (
+        "village",
+        "town",
+        "suburb",
+        "city",
+        "state",
+        "country",
+    ):
+        location_name = address.get(address_type)
+
+        if isinstance(location_name, str) and location_name.strip():
+            location_name = location_name.strip()
+
+            logger.info(
+                "Reverse geocoding resolved coordinates to %s: %s.",
+                address_type,
+                location_name,
+            )
+            return location_name
+
+    logger.info(
+        "Nominatim returned no usable place name for latitude=%s, "
+        "longitude=%s.",
+        latitude,
+        longitude,
+    )
+    return None
 
 def location_validate(location_name: str) -> bool | None:
     """Validate a location name using the configured geocoding service.

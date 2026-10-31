@@ -21,9 +21,6 @@ from filesystem_importer.import_loop import (
     build_failed_photo_record,
     build_photo_record,
 )
-from filesystem_importer.metadata_extraction import (
-    extract_usercomment_metadata,
-)
 
 
 def test_build_failed_photo_record_contains_required_fields(tmp_path):
@@ -54,15 +51,20 @@ def test_process_candidate_creates_record_only_on_failure(tmp_path):
             reason="EXIF test failed",
         ),
     ):
-        record = process_candidate(source, photos, "Test Event")
+        record = process_candidate(
+            source,
+            photos,
+            "Test Event",
+            source_directory=tmp_path,
+        )
 
     assert record is not None
     assert record["downloaded"] is False
     assert record["file"] == ""
 
-
-
 def test_process_candidate_builds_record_on_success(tmp_path):
+    import piexif
+    from PIL import Image
     from piexif import helper
 
     source = tmp_path / "source.jpg"
@@ -70,20 +72,23 @@ def test_process_candidate_builds_record_on_success(tmp_path):
     source.touch()
     photos.mkdir()
 
+    staged_path = photos / "source.jpg"
+    Image.new("RGB", (20, 20)).save(staged_path, format="JPEG")
+
     original_comment = helper.UserComment.dump(
         "Test Event | 2024 | Paris | Family trip"
     )
-    extracted_metadata = []
 
-    def capture_extraction(comment, photo_record):
-        extracted_metadata.append(comment)
-        photo_record["event"] = "Test Event"
-        photo_record["year"] = "2024"
-        photo_record["location"] = "Paris"
-        photo_record["info"] = "Family trip"
-        result = extract_usercomment_metadata(comment)
-        extracted_metadata.append(result)
-        return result
+    exif = {
+        "0th": {},
+        "Exif": {
+            piexif.ExifIFD.UserComment: original_comment,
+        },
+        "GPS": {},
+        "1st": {},
+        "thumbnail": None,
+    }
+    piexif.insert(piexif.dump(exif), str(staged_path))
 
     with (
         patch(
@@ -94,7 +99,6 @@ def test_process_candidate_builds_record_on_success(tmp_path):
                 original_comment=original_comment,
             ),
         ),
-        
         patch(
             "filesystem_importer.metadata_extraction.year_validate",
             return_value="2024",
@@ -103,11 +107,6 @@ def test_process_candidate_builds_record_on_success(tmp_path):
             "filesystem_importer.metadata_extraction.location_validate",
             return_value=True,
         ),
-        
-        patch(
-            "filesystem_importer.import_loop.extract_usercomment_metadata",
-            side_effect=capture_extraction,
-        ) as extract_mock,
     ):
         record = process_candidate(
             source,
@@ -117,24 +116,16 @@ def test_process_candidate_builds_record_on_success(tmp_path):
             source_directory=tmp_path,
         )
 
-    extract_mock.assert_called_once_with(original_comment)
-    assert len(extracted_metadata) == 1
-    extracted = extracted_metadata[0]
-    assert extracted.exif_event == "Test Event"
-    assert extracted.exif_year == "2024"
-    assert extracted.exif_location == "Paris"
-    assert extracted.exif_info == "Family trip"
-
     assert record["guid"] == str(source.resolve())
     assert record["downloaded"] is True
     assert record["file"] == "source.jpg"
     assert record["event"] == "Test Event"
+    assert record["year"] == "2024"
+    assert record["location"] == "Paris"
+    assert record["info"] == "Family trip"
     assert record["lat"] is None
     assert record["lng"] is None
-    assert record["location"] == ""
-    assert record["info"] == ""
-
-
+    assert record["moment_id"] == tmp_path.name
 
 def test_process_candidate_propagates_fatal_staging_error(tmp_path):
     source = tmp_path / "source.jpg"
@@ -395,12 +386,15 @@ def test_run_import_loop_records_failed_candidate_and_saves_checkpoint(
     assert progress.failed == 1
     assert progress.remaining == 0
 
-    mock_process.assert_called_once_with(
-        source_path=candidate,
-        photos_directory=photos_directory,
-        event_name="Test Event",
-        directory_classifications={},
-    )
+    assert mock_process.call_count == 1
+    call_kwargs = mock_process.call_args.kwargs
+
+    assert call_kwargs["source_path"] == candidate
+    assert call_kwargs["photos_directory"] == photos_directory
+    assert call_kwargs["event_name"] == "Test Event"
+    assert call_kwargs["directory_classifications"] == {}
+    assert call_kwargs["source_directory"] is None
+    assert call_kwargs["existing_photo_records"] is checkpoint["photos"]
     mock_display.assert_called()
     mock_save.assert_called_once_with(
         checkpoint=checkpoint,
@@ -512,6 +506,7 @@ def test_run_import_loop_records_successful_candidate_and_saves_checkpoint(
             checkpoint=checkpoint,
             candidate_paths=[candidate],
             photos_directory=photos_directory,
+            source_directory=None,
             checkpoint_path=tmp_path / "importing.json",
         )
 
@@ -521,12 +516,15 @@ def test_run_import_loop_records_successful_candidate_and_saves_checkpoint(
     assert progress.failed == 0
     assert progress.remaining == 0
 
-    mock_process.assert_called_once_with(
-        source_path=candidate,
-        photos_directory=photos_directory,
-        event_name="Test Event",
-        directory_classifications={"1": "Event"},
-    )
+    assert mock_process.call_count == 1
+    call_kwargs = mock_process.call_args.kwargs
+
+    assert call_kwargs["source_path"] == candidate
+    assert call_kwargs["photos_directory"] == photos_directory
+    assert call_kwargs["event_name"] == "Test Event"
+    assert call_kwargs["directory_classifications"] == {"1": "Event"}
+    assert call_kwargs["source_directory"] is None
+    assert call_kwargs["existing_photo_records"] is checkpoint["photos"]
     mock_display.assert_called()
     mock_save.assert_called_once_with(
         checkpoint=checkpoint,
