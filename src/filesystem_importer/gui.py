@@ -37,6 +37,11 @@ from filesystem_importer.checkpoint_writer import write_initial_checkpoint
 from filesystem_importer.checkpoint_reader import read_checkpoint
 from filesystem_importer.staging_audit import audit_staging_directory
 from filesystem_importer.import_loop import initialise_progress, run_import_loop
+from filesystem_importer.project_preparation import prepare_project_json
+from filesystem_importer.project_finalization import (
+    ProjectFinalizationError,
+    finalize_project,
+)
 
 logger = get_logger(__name__)
 
@@ -99,9 +104,12 @@ class FilesystemImporterWindow(QMainWindow):
         self.event_name = None
         self.staging_directory: Path | None = None
         self.checkpoint_path: Path | None = None
+        self.finalization_pending = False
+        self.finalization_progress = None
         self.import_thread = None
         self.import_worker = None
         self._build_ui()
+        self.completion_acknowledgement = False
         self.show_normal_state()
 
         logger.info("Main window initialised.")
@@ -177,6 +185,7 @@ class FilesystemImporterWindow(QMainWindow):
         self.primary_button.show()
         self.primary_button.setEnabled(True)
         self.secondary_button.hide()
+        self.completion_acknowledgement = False
 
         logger.info("Initial screen set to normal state.")
 
@@ -435,6 +444,7 @@ class FilesystemImporterWindow(QMainWindow):
     @Slot(object)
     def _on_import_finished(self, progress):
         """Handle successful completion of the import loop."""
+
         logger.info(
             "Import loop finished: total=%d, processed=%d, "
             "successful=%d, failed=%d, remaining=%d",
@@ -445,8 +455,84 @@ class FilesystemImporterWindow(QMainWindow):
             progress.remaining,
         )
 
-        # The next workflow stage will be connected here.
-        self.status_heading.setText("Import finished")
+        self.finalization_progress = progress
+        self.finalization_pending = True
+
+        self._finalize_import()
+
+    def _finalize_import(self):
+        """Prepare and publish the completed Photo Manager project."""
+
+        if not self.finalization_pending:
+            return
+
+        if self.checkpoint_path is None:
+            logger.error(
+                "Cannot finalise import: checkpoint path is not configured."
+            )
+            self.status_heading.setText("Finalisation failed")
+            self.status_detail.setText(
+                "The recovery checkpoint path is not configured."
+            )
+            return
+
+        logger.info("Starting project preparation and publication.")
+
+        try:
+            # Stage 1: Create the cleaned Photo Manager project JSON.
+            prepared_path = prepare_project_json(self.checkpoint_path)
+
+            logger.info(
+                "Prepared project JSON created: %s",
+                prepared_path,
+            )
+
+            # Stage 2: Move the project into the Photo Manager workspace.
+            project_path = finalize_project(prepared_path)
+
+        except (OSError, ValueError, ProjectFinalizationError) as exc:
+            logger.exception("Project preparation or publication failed.")
+
+            self.status_heading.setText("Project publication failed")
+            self.status_detail.setText(
+                f"The photo import has finished, but the project "
+                f"could not be published:\n\n{exc}\n\n"
+                "The original recovery checkpoint has been retained. "
+                "Correct the problem and select Retry Finalisation."
+            )
+
+            self.primary_button.setText("Retry Finalisation")
+            self.primary_button.setEnabled(True)
+            self.secondary_button.hide()
+            return
+
+        # Publication succeeded. Reset the import state.
+        progress = self.finalization_progress
+
+        self.finalization_pending = False
+        self.finalization_progress = None
+        self.completion_acknowledgement = True
+        self.checkpoint_path = None
+        self.partial_import = None
+        self.scan_result = None
+        self.classifications = None
+        self.event_name = None
+        self.startup_state = "clean"
+
+        logger.info("Project publication completed: %s", project_path)
+
+        self.status_heading.setText("Import complete")
+        self.status_detail.setText(
+            f"Project successfully published:\n{project_path}\n\n"
+            f"Total candidates: {progress.total}\n"
+            f"Successfully imported: {progress.successful}\n"
+            f"Failed candidates excluded: {progress.failed}"
+        )
+
+        self.primary_button.setText("OK")
+        self.primary_button.setEnabled(True)
+        self.primary_button.show()
+        self.secondary_button.hide()
 
     @Slot(str)
     def _on_import_failed(self, message):
@@ -519,6 +605,16 @@ class FilesystemImporterWindow(QMainWindow):
 
     def _on_primary_clicked(self):
         """Handle the primary action."""
+
+        if self.completion_acknowledgement:
+            logger.info("Completed import acknowledged by user.")
+            self.show_normal_state()
+            return
+
+        if self.finalization_pending:
+            logger.info("Project finalisation retry requested.")
+            self._finalize_import()
+            return
 
         if self.checkpoint_path is not None:
             return

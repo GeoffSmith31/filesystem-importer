@@ -25,6 +25,7 @@ DEVELOPER_EMAIL = "dev.photomanager@gmail.com"
 # Checkpoint and project asset directory names.
 CHECKPOINT_FILENAME = "importing.json"
 IMAGE_FOLDER_NAME = "photos"
+PREPARED_FILENAME = "prepared.json"
 
 # Set when the help documentation is published.
 HELP_URL = ""
