@@ -28,4 +28,4 @@ IMAGE_FOLDER_NAME = "photos"
 PREPARED_FILENAME = "prepared.json"
 
 # Set when the help documentation is published.
-HELP_URL = ""
+HELP_URL = "https://geoffsmith31.github.io/filesystem-importer/"
