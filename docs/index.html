@@ -32,11 +32,20 @@
         li {
             margin-bottom: 10px;
         }
-        .notice {
-            background: #eef5fa;
-            border-left: 4px solid #4285b4;
-            padding: 12px 16px;
-            margin: 20px 0;
+        figure {
+            text-align: center;
+            margin: 24px 0;
+        }
+        figure img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        figcaption {
+            color: #65737e;
+            font-size: 0.9em;
+            margin-top: 6px;
         }
         footer {
             margin-top: 30px;
@@ -65,7 +74,7 @@
 
     <h2>Launching Filesystem Importer</h2>
 
-    <figure style="text-align: center; margin: 24px 0;">
+    <figure>
         <img
             src="filesystem-importer.png"
             alt="Filesystem Importer application icon"
@@ -83,6 +92,595 @@
     <p>
         If you have added Filesystem Importer to your dock, you can
         launch it by clicking its icon there instead.
+    </p>
+
+    <h2>First Run — Application Settings</h2>
+
+    <p>
+        The first time Filesystem Importer starts, it displays the Application
+        Settings dialog. This prevents overloading the Nominatum web service 
+        that is used to help determine the location for photos.
+    </p>
+
+    <figure>
+        <img
+            src="application-settings.png"
+            alt="Application Settings dialog showing a minimum request interval of 1.0 seconds"
+        >
+        <figcaption>Application Settings on first run</figcaption>
+    </figure>
+
+    <p>
+        The <strong>Minimum request interval</strong> is set to
+        <strong>1.0 seconds</strong> by default. When using the public
+        Nominatim service, this interval must be at least one second.
+    </p>
+
+    <p>
+        Click <strong>OK</strong> to accept the displayed setting and continue.
+    </p>
+
+    <h2>The Initial Screen</h2>
+
+    <p>
+        After the first-run settings have been accepted, Filesystem Importer
+        displays its initial screen. When there is no unfinished import to
+        resume, the screen indicates that no partial imports have been detected.
+    </p>
+
+    <figure>
+        <img
+            src="initial-screen.png"
+            alt="Filesystem Importer initial screen showing no partial imports detected and the Select Source Directory button"
+        >
+        <figcaption>Filesystem Importer initial screen</figcaption>
+    </figure>
+
+    <p>
+        To begin a new import, click <strong>Select Source Directory</strong>.
+        You will then be able to choose the directory containing the photographs
+        you want to import.
+    </p>
+
+    <p>
+        Click <strong>Help</strong> to open this help page.
+    </p>
+
+    <h2>Selecting the Source Directory</h2>
+
+    <p>
+        Click <strong>Select Source Directory</strong> on the initial screen
+        to open the directory chooser.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="directory-selection.png"
+            alt="Directory chooser showing the Filesystem-Test directory and its subdirectories"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>Selecting the source directory</figcaption>
+    </figure>
+
+    <h3>Choosing the Source Directory</h3>
+
+    <p>
+        Browse to the directory containing the photographs you want to
+        import. The directory can contain photographs directly,
+        photographs organised into subdirectories, or a combination of these.
+    </p>
+
+    <p>
+        If your photographs are organised into a directory structure,
+        select the highest-level directory containing the collection
+        you want to import. Filesystem Importer will examine its
+        subdirectories when looking for photographs.
+    </p>
+
+    <p>
+        When you have located the correct directory, click
+        <strong>Open</strong> to select it.
+    </p>
+
+    <p>
+        If you decide not to proceed, click <strong>Cancel</strong>
+        to return to the initial screen without selecting a directory.
+    </p>
+
+    <h2>Classifying Directory Levels</h2>
+
+    <p>
+        After selecting a source directory, Filesystem Importer examines
+        its directory structure and identifies the levels containing
+        candidate photographs.
+    </p>
+
+    <p>
+        The <strong>Classify Directory Levels</strong> screen displays
+        the source directory, the number of candidate image files found,
+        and the deepest relevant directory level.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="directory-classification.png"
+            alt="Filesystem Importer showing the directory levels and their assigned categories"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>Classifying directory levels</figcaption>
+    </figure>
+
+    <p>
+        The table shows the directory levels beneath the selected
+        source directory. For each level, it lists the directory names
+        found at that level and allows you to select their meaning.
+    </p>
+
+    <h3>Assigning Categories</h3>
+
+    <p>
+        Each directory level may be assigned a category, such as
+        <strong>Event</strong>, <strong>Location</strong> or
+        <strong>Year</strong>.  Or, you may select <strong>Ignore</strong>, in 
+        which case no category is assigned at that level.  
+    </p>
+
+    <p>
+        All directories at the same level use the same category.
+        For example, if Level 2 is classified as Location, every
+        directory at that level will attempt to be interpreted as a location.
+    </p>
+
+    <p>
+        Choose the category that best describes the directory names
+        at each level. A directory name that cannot be interpreted
+        for the selected category will produce a null value.
+    </p>
+
+    <h3>Understanding Directory Inheritance</h3>
+
+    <p>
+        Directory inheritance allows Filesystem Importer to obtain
+        metadata from the directory structure rather than requiring
+        every photograph to have its own information entered.
+    </p>
+
+    <p>
+        For each photograph, the importer works upwards through the
+        directory structure, starting with the photograph's containing
+        directory and moving towards the selected source directory.
+        It looks for the first valid value for each of the following
+        fields:
+    </p>
+
+    <ul>
+        <li><strong>Event:</strong> The name of a directory classified as Event.</li>
+        <li><strong>Location:</strong> The name of a directory classified as Location.</li>
+        <li><strong>Year:</strong> The name of a directory classified as Year.</li>
+        <li><strong>Info:</strong> The name of a directory classified as Info.</li>
+    </ul>
+
+    <p>
+        Each field is searched for independently. The first valid
+        value found for that field is used. If a directory name cannot
+        be interpreted as a valid value for its assigned category,
+        the importer continues upwards to the next directory.
+    </p>
+
+    <p>
+        This means that a photograph can inherit its Event from one
+        directory level, its Location from another, and its Year or
+        Info from yet another. The values do not all have to come
+        from the same directory.
+    </p>
+
+    <p>
+        Directory inheritance is used when a suitable value cannot
+        be obtained from the photograph's own metadata. Information
+        already available from the photograph, such as its EXIF data
+        or embedded comment, may take precedence.
+    </p>
+
+    <h3>Continue</h3>
+
+    <p>
+        Assign a category, or Ignore, to each directory level.
+        When you are satisfied with the classifications, click
+        <strong>Continue</strong> to proceed.
+    </p>
+
+    <p>
+        Click <strong>Cancel</strong> to abandon the current selection
+        and return to the previous stage.
+    </p>
+
+    <h2>Confirming the Event Name</h2>
+
+    <p>
+        After you continue from the directory classification screen,
+        Filesystem Importer asks you to confirm the Event Name for
+        the import.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="event-name-confirmation.png"
+            alt="Filesystem Importer asking the user to confirm the Event Name"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>Confirming the Event Name</figcaption>
+    </figure>
+
+    <p>
+        A suggested name is provided automatically. You can accept
+        this name or edit it to use a different name for the event.
+    </p>
+
+    <h3>Editing the Event Name</h3>
+
+    <p>
+        Click in the text field to change the suggested name.
+        Choose a meaningful name that will help identify the event
+        associated with the imported photographs.
+    </p>
+
+    <h3>Confirm</h3>
+
+    <p>
+        When you are satisfied with the name, click
+        <strong>Confirm</strong> to continue with the import.
+    </p>
+
+    <h3>Cancel</h3>
+
+    <p>
+        Click <strong>Cancel</strong> to abandon the current operation and
+        and return to directory classification.
+    </p>
+
+    <h2>Importing Photographs</h2>
+
+    <p>
+        After confirming the Event Name, Filesystem Importer begins
+        processing the photographs found in the source directory
+        and its subdirectories.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="import-progress.png"
+            alt="Filesystem Importer displaying import progress and processing statistics"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>Importing photographs</figcaption>
+    </figure>
+
+    <p>
+        The screen displays the Event Name and source directory,
+        together with statistics showing the progress of the import.
+    </p>
+
+    <h3>Import Progress</h3>
+
+    <p>The progress information includes:</p>
+
+    <ul>
+        <li>
+            <strong>Total candidates:</strong>
+            The total number of candidate image files identified
+            in the source directory.
+        </li>
+        <li>
+            <strong>Processed:</strong>
+            The number of candidate files processed so far.
+        </li>
+        <li>
+            <strong>Successful:</strong>
+            The number of files successfully processed.
+        </li>
+        <li>
+            <strong>Failed:</strong>
+            The number of files that could not be processed successfully.
+        </li>
+        <li>
+            <strong>Remaining:</strong>
+            The number of candidate files still awaiting processing.
+        </li>
+    </ul>
+
+    <p>
+        These figures are updated as the import proceeds, allowing
+        you to monitor its progress.
+    </p>
+
+    <p>
+        During this stage the application displays
+        <strong>Importing...</strong>. No further action is required.
+        Allow the process to finish.
+    </p>
+
+    <h3>Help</h3>
+
+    <p>
+        Click <strong>Help</strong> to open this help page.
+    </p>
+
+    <h2>Import Complete</h2>
+
+    <p>
+        When Filesystem Importer has finished processing the candidate
+        photographs, it publishes the completed project into the
+        Photo Manager workspace.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="import-complete.png"
+            alt="Filesystem Importer displaying the completed import summary"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>Import successfully completed and published</figcaption>
+    </figure>
+
+    <h3>Import Summary</h3>
+
+    <p>
+        The completion screen confirms where the project has been
+        published and displays a summary of the import results.
+    </p>
+
+    <ul>
+        <li>
+            <strong>Project successfully published:</strong>
+            The location of the completed project's <code>project.json</code>
+            file in the Photo Manager workspace.
+        </li>
+        <li>
+            <strong>Total candidates:</strong>
+            The total number of candidate image files identified
+            for the import.
+        </li>
+        <li>
+            <strong>Successfully imported:</strong>
+            The number of photographs successfully imported into
+            the project.
+        </li>
+        <li>
+            <strong>Failed candidates excluded:</strong>
+            The number of candidate files that could not be
+            successfully imported and have therefore been excluded
+            from the published project.
+        </li>
+    </ul>
+
+    <p>
+        The numbers will vary depending on the source photographs
+        and the outcome of the import.
+    </p>
+
+    <h3>OK</h3>
+
+    <p>
+        Click <strong>OK</strong> to acknowledge the completed import
+        and return to the Filesystem Importer initial screen.
+    </p>
+
+    <p>
+        The published project is now available for use in Photo Manager.
+    </p>
+
+    <h3>Help</h3>
+
+    <p>
+        Click <strong>Help</strong> to open this help page.
+    </p>
+
+    <h2>Resuming an Interrupted Import</h2>
+
+    <p>
+        If an import is interrupted before completion, Filesystem
+        Importer saves its progress so that the operation can be
+        resumed later.
+    </p>
+
+    <p>
+        When you next launch Filesystem Importer, it checks for an
+        unfinished import. If one is found, the application displays
+        the Partial Import Detected screen.
+    </p>
+
+    <figure style="text-align: center; margin: 24px 0;">
+        <img
+            src="partial-import.png"
+            alt="Filesystem Importer displaying the Partial Import Detected screen"
+            style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;"
+        >
+        <figcaption>An unfinished import has been detected</figcaption>
+    </figure>
+
+    <p>
+        The screen displays the date and time the partial import was
+        last modified. This helps you identify the unfinished
+        operation.
+    </p>
+
+    <h3>Resume</h3>
+
+    <p>
+        Click <strong>Resume</strong> to continue the interrupted
+        import. Filesystem Importer first verifies the saved project
+        before continuing.
+    </p>
+
+    <p>
+        The importer uses the saved progress information to continue
+        processing the photographs.
+    </p>
+
+    <h3>Delete Partial Import</h3>
+
+    <p>
+        Click <strong>Delete Partial Import</strong> if you no longer
+        wish to continue the unfinished import.
+    </p>
+
+    <p>
+        This removes the saved partial import. You will then be able
+        to start a new import by selecting a source directory.
+        Do not choose this option if you intend to resume or to manually
+        recover the partial import.
+    </p>
+
+    <h3>Help</h3>
+
+    <p>
+        Click <strong>Help</strong> to open this help page.
+    </p>
+
+    <h2>Application Files and Data Locations</h2>
+
+    <p>
+        Filesystem Importer keeps its application files, user settings,
+        logs and temporary importing data in separate locations.
+        This section describes where these files are stored on Linux.
+    </p>
+
+    <h3>Installed Application</h3>
+
+    <p>
+        The installer places the application in the following directory
+        within your home directory:
+    </p>
+
+    <p>
+        <code>~/.local/opt/filesystem-importer/</code>
+    </p>
+
+    <p>
+        This directory contains the application executable, its
+        supporting libraries and the resources required to run it.
+        These files should not normally need to be accessed or changed.
+    </p>
+
+    <h3>Application Settings and Data</h3>
+
+    <p>
+        Filesystem Importer stores its persistent user data in:
+    </p>
+
+    <p>
+        <code>~/.local/share/filesystem-importer/</code>
+    </p>
+
+    <p>
+        This directory contains the following files and subdirectories:
+    </p>
+
+    <ul>
+        <li>
+            <strong>settings.json:</strong>
+            Stores the application settings, including the minimum
+            interval between geocoding requests. These settings are
+            retained between application sessions.
+        </li>
+        <li>
+            <strong>tested-locations.json:</strong>
+            The location cache. It stores the results of location
+            validation so that previously checked location names
+            do not need to be checked repeatedly.
+        </li>
+        <li>
+            <strong>logs/:</strong>
+            Contains the application log file.
+        </li>
+    </ul>
+
+    <h3>Application Log</h3>
+
+    <p>
+        The log file is located at:
+    </p>
+
+    <p>
+        <code>~/.local/share/filesystem-importer/logs/filesystem-importer.log</code>
+    </p>
+
+    <p>
+        The log records application activity, importing operations
+        and any errors or warnings encountered. It can be useful
+        when investigating a problem with an import.
+    </p>
+
+    <p>
+        When reporting a problem, including the log file can help
+        identify what happened.
+    </p>
+
+    <h3>Photo Manager Workspace and Staging Area</h3>
+
+    <p>
+        Filesystem Importer uses the workspace directory configured
+        in Photo Manager. It reads the Photo Manager settings file
+        at:
+    </p>
+
+    <p>
+        <code>~/.config/photo_manager/settings.json</code>
+    </p>
+
+    <p>
+        This is Photo Manager's own settings file. Filesystem Importer
+        reads the configured workspace location from it.
+    </p>
+
+    <p>
+        While an import is in progress, Filesystem Importer uses
+        the following directory beneath the Photo Manager workspace:
+    </p>
+
+    <p>
+        <code>Importers/Filesystem/</code>
+    </p>
+
+    <p>
+        This is the temporary staging area. It holds the importing
+        checkpoint and photographs being processed. The checkpoint
+        allows an interrupted import to be resumed.
+    </p>
+
+    <p>
+        Do not manually remove or modify files in this directory
+        while an import is in progress.
+    </p>
+
+    <p>
+        Once the import has completed successfully, the completed
+        project is published into the Photo Manager workspace.
+        The final project location is displayed on the Import Complete
+        screen.
+    </p>
+
+    <h3>Desktop Integration</h3>
+
+    <p>
+        The installer also creates the Ubuntu application launcher at:
+    </p>
+
+    <p>
+        <code>~/.local/share/applications/filesystem-importer.desktop</code>
+    </p>
+
+    <p>
+        Application icons are installed beneath:
+    </p>
+
+    <p>
+        <code>~/.local/share/icons/hicolor/</code>
+    </p>
+
+    <p>
+        These files allow Filesystem Importer to appear in the
+        Ubuntu application menu and display its correct icon.
     </p>
 
     <footer>
