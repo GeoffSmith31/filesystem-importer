@@ -16,14 +16,19 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from filesystem_importer.app_logging import (
     configure_logging,
     get_logger,
 )
-from filesystem_importer.constants import APP_NAME
+from filesystem_importer.constants import (
+    APP_NAME,
+    IMPORTER_ID,
+)
 from filesystem_importer.geocoding import configure_geocoding
 from filesystem_importer.geocoding_rate_limit import geocoding_rate_limiter
 from filesystem_importer.gui import FilesystemImporterWindow
@@ -43,6 +48,18 @@ from filesystem_importer.workspace_discovery import (
 
 logger = get_logger(__name__)
 
+def resource_path(relative_path: str) -> Path:
+    """Return a resource path for development or packaged execution."""
+
+    bundle_directory = getattr(sys, "_MEIPASS", None)
+
+    if bundle_directory is not None:
+        base_directory = Path(bundle_directory)
+    else:
+        # main.py is located in src/filesystem_importer/
+        base_directory = Path(__file__).resolve().parents[2]
+
+    return base_directory / relative_path
 
 def obtain_settings(parent=None):
     """Load settings or request them from the user on first run."""
@@ -144,6 +161,28 @@ def main() -> None:
         logger.debug("Development mode enabled.")
 
     app = QApplication(sys.argv[:1])
+
+    # Set the desktop identity used to associate the running window
+    # with its installed .desktop launcher.
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    app.setDesktopFileName(IMPORTER_ID)
+
+    # Set the default icon for application windows.
+    icon_path = resource_path(
+        "resources/filesystem-importer.png"
+    )
+
+    if icon_path.is_file():
+        application_icon = QIcon(str(icon_path))
+
+        if application_icon.isNull():
+            logger.error("Could not load application icon: %s", icon_path)
+        else:
+            app.setWindowIcon(application_icon)
+            logger.info("Application icon loaded: %s", icon_path)
+    else:
+        logger.error("Application icon not found: %s", icon_path)
 
     settings = obtain_settings()
 

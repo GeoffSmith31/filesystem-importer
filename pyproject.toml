@@ -19,7 +19,9 @@ dev = [
     "pytest",
     "Pillow",
 ]
-
+build = [
+    "pyinstaller",
+]
 [project.scripts]
 filesystem-importer = "filesystem_importer.main:main"
 
